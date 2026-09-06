@@ -200,7 +200,7 @@ Only output the SKILL.md content, nothing else. Do NOT wrap the output in markdo
         if (body) content += body + '\n';
 
         // Determine save path
-        const folders = window.workspace?.folders || [];
+        const folders = this.aiManager?.getEffectiveWorkspaceFolders ? this.aiManager.getEffectiveWorkspaceFolders(this.aiManager.activeSession) : (window.workspace?.folders || []);
         const saveRoot = folders.length > 0 ? `${folders[0]}/.agents/skills` : null;
 
         if (!saveRoot) {
@@ -214,7 +214,7 @@ Only output the SKILL.md content, nothing else. Do NOT wrap the output in markdo
         try {
             // Check for duplicate name (if creating new)
             if (!this.existingSkill) {
-                const allSkills = await this.aiManager._loadAllParsedSkills();
+                const allSkills = await this.aiManager._loadAllParsedSkills(this.aiManager?.activeSession);
                 const duplicate = allSkills.find(s => s.name.toLowerCase() === name.toLowerCase());
                 if (duplicate) {
                     await window.modal.notice(`A skill named "${duplicate.name}" already exists.`, "Duplicate Skill");

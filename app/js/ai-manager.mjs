@@ -196,11 +196,7 @@ class AIManager {
 				: (activeAi?.config?.thinkingLevel || "medium");
 			const isNativeReasoning = !!(activeAi && activeAi.supportsReasoning && effectiveThinkingLevel !== "off" && !targetSession?.disableReasoning);
 
-			const allFolders = window.workspace?.folders || [];
-			const pinnedRoots = targetSession?.pinnedRoots || [];
-			const effectiveFolders = pinnedRoots.length > 0
-				? allFolders.filter(f => pinnedRoots.some(p => f === p || f.endsWith('/' + p) || f.split(/[\\/]/).filter(Boolean).pop() === p))
-				: allFolders;
+			const effectiveFolders = this.getEffectiveWorkspaceFolders(targetSession);
 
 			basePrompt = getAgentSystemPrompt(modelName, {
 				supportsJSONTools,
@@ -219,11 +215,7 @@ class AIManager {
 		}
 
 		// Persistent memory scratch-pad: read .agents/AGENTS.md from active workspace roots
-		const allFolders = window.workspace?.folders || [];
-		const pinnedRoots = targetSession?.pinnedRoots || [];
-		const folders = pinnedRoots.length > 0
-			? allFolders.filter(f => pinnedRoots.some(p => f === p || f.endsWith('/' + p) || f.split(/[\\/]/).filter(Boolean).pop() === p))
-			: allFolders;
+		const folders = this.getEffectiveWorkspaceFolders(targetSession);
 		const hints = [];
 		for (const folder of folders) {
 			try {
@@ -264,7 +256,7 @@ class AIManager {
 			const lastUserMsg = targetSession?.messages?.filter(m => m.role === "user" || m.type === "user")?.pop();
 			const userPromptText = lastUserMsg ? lastUserMsg.content : "";
 			
-			const allParsedSkills = await this._loadAllParsedSkills();
+			const allParsedSkills = await this._loadAllParsedSkills(targetSession);
 			const pinnedSkillNames = targetSession?.pinnedSkills || [];
 			
 			// 1. Get ephemeral skills (matched via relevance)
@@ -301,8 +293,31 @@ class AIManager {
 		return basePrompt;
 	}
 
-	async _loadAllParsedSkills() {
-		const folders = window.workspace?.folders || [];
+	getEffectiveWorkspaceFolders(session = null) {
+		const allFolders = window.workspace?.folders || [];
+		if (allFolders.length === 0) return [];
+
+		const targetSession = session || this.activeSession;
+		const pinnedRoots = targetSession?.pinnedRoots || [];
+		if (pinnedRoots.length > 0) {
+			const filtered = allFolders.filter(f => {
+				const normF = f.replace(/\\/g, '/').replace(/\/+$/, '');
+				const nameF = normF.split('/').filter(Boolean).pop() || normF;
+				return pinnedRoots.some(p => {
+					const normP = p.replace(/\\/g, '/').replace(/\/+$/, '');
+					const nameP = normP.split('/').filter(Boolean).pop() || normP;
+					return normF === normP || normF.endsWith('/' + normP) || nameF === nameP;
+				});
+			});
+			if (filtered.length > 0) return filtered;
+			return pinnedRoots;
+		}
+
+		return allFolders;
+	}
+
+	async _loadAllParsedSkills(session = null) {
+		const folders = this.getEffectiveWorkspaceFolders(session);
 		const roots = [...folders.map(f => `${f}/.agents/skills`), "/home/jason/.gemini/config/skills"];
 		const parsedSkills = [];
 
@@ -1210,7 +1225,7 @@ class AIManager {
 					// 1. Handle Skill Lookup (@skill...)
 					if (searchTerm.startsWith('skill')) {
 						const skillQuery = searchTerm.substring(5);
-						const allSkills = await this._loadAllParsedSkills();
+						const allSkills = await this._loadAllParsedSkills(this.activeSession);
 						const skillCompletions = allSkills
 							.filter(s => s.name.toLowerCase().includes(skillQuery.toLowerCase()))
 							.map(s => ({
