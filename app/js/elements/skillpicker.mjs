@@ -59,7 +59,7 @@ export class SkillPicker extends Block {
 
     async filterSkills() {
         const query = this.searchInput.value.toLowerCase();
-        const allSkills = await this.aiManager._loadAllParsedSkills();
+        const allSkills = await this.aiManager._loadAllParsedSkills(this.aiManager.activeSession);
         const filtered = allSkills.filter(s => s.name.toLowerCase().includes(query));
 
         this.listContainer.innerHTML = '';

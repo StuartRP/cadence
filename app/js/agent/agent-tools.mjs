@@ -28,6 +28,10 @@ class AgentTools {
             const session = (targetSessionId && aiManager?.runningSessions?.get(targetSessionId)?.instance?.session)
                 || (targetSessionId === aiManager?.activeSessionId ? aiManager?.activeSession : null);
 
+            if (aiManager?.getEffectiveWorkspaceFolders) {
+                return aiManager.getEffectiveWorkspaceFolders(session);
+            }
+
             const pinnedRoots = session?.pinnedRoots || [];
             if (pinnedRoots.length > 0) {
                 const filtered = allFolders.filter(f => {

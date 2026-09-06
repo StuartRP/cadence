@@ -1299,7 +1299,7 @@ ui-tab-item.plan-tasks-tab.active .status-icon {
 }
 
 .accordion-content {
-    max-height: 40vh;
+    max-height: 80vh;
     overflow-y: auto;
     transition: opacity 0.2s ease;
 }
@@ -1424,19 +1424,21 @@ ui-editor-holder .artifacts-accordion-container .ace_editor,
 
 /* --- Session Artifacts Accordion Styles --- */
 .artifacts-accordion-container {
-    display: flex;
-    flex-direction: column;
     width: 100%;
     overflow-y: auto;
     padding: 8px;
-    gap: 12px;
     box-sizing: border-box;
     background: var(--bg-primary);
+    column-width: 420px;
+    column-gap: 12px;
 }
 
 .accordion-item {
     display: flex;
     flex-direction: column;
+    width: 100%;
+    margin-bottom: 12px;
+    break-inside: avoid;
     border: 1px solid var(--border-primary);
     border-radius: var(--borderRadius);
     overflow: hidden;
