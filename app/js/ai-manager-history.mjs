@@ -2269,6 +2269,7 @@ class AIManagerHistory {
 	 */
 	async tokenizeMessage(message, sessionObj = null) {
 		if (!message || !this.ai || !this.ai.isConfigured()) return;
+		if (typeof message.tokenCount === 'number') return;
 		if (typeof this.ai.tokenize !== 'function') return;
 		if (message.type === 'system_message' || message.type === 'error' || message.role === 'temp_ai_response') {
 			message.tokenCount = 0;
@@ -2801,7 +2802,8 @@ class AIManagerHistory {
 								role: "user",
 								type: "cycle_summary",
 								content: `<compacted_cycle title="${cycleTitle}">\n${msg.content}\n</compacted_cycle>`,
-								timestamp: msg.timestamp
+								timestamp: msg.timestamp,
+								...(typeof msg.tokenCount === 'number' ? { tokenCount: msg.tokenCount } : {})
 							});
 						} else {
 							// Older summary: remove raw turns from history, and inject the condensed milestones block once at the head
@@ -3180,6 +3182,7 @@ class AIManagerHistory {
 				contextForAI.push({
 					role: "user",
 					content: `--- Outline: ${msg.id} ---\n\`\`\`${msg.language}\n${msg.outline}\n\`\`\``,
+					...(typeof msg.tokenCount === 'number' ? { tokenCount: msg.tokenCount } : {})
 				});
 			}
 		});
@@ -3191,6 +3194,7 @@ class AIManagerHistory {
 					contextForAI.push({
 						role: "user",
 						content: `--- File: ${msg.id} ---\n\`\`\`${msg.language}\n${msg.content}\n\`\`\``,
+						...(typeof msg.tokenCount === 'number' ? { tokenCount: msg.tokenCount } : {})
 					});
 				}
 			} else {
@@ -3246,7 +3250,8 @@ class AIManagerHistory {
 
 				const contextItem = {
 					role: msg.role,
-					content: content
+					content: content,
+					...(typeof msg.tokenCount === 'number' ? { tokenCount: msg.tokenCount } : {})
 				};
 				
 				const msgSig = msg.thoughtSignature || msg.thought_signature;

@@ -913,12 +913,14 @@ export class Agent {
 
 				// Append all accumulated tool results as a single user response to feed back into conversation
 				if (accumulatedResponses.length > 0) {
+					const toolContent = accumulatedResponses.join("\n\n---\n\n");
 					const toolResponseMessage = {
 						id: crypto.randomUUID(),
 						role: "user",
 						type: "tool_response",
-						content: accumulatedResponses.join("\n\n---\n\n"),
-						timestamp: Date.now()
+						content: toolContent,
+						timestamp: Date.now(),
+						tokenCount: aiManager?.ai?.estimateTokens ? aiManager.ai.estimateTokens(toolContent) : Math.ceil(toolContent.length / 3.2)
 					};
 					session.messages.push(toolResponseMessage);
 					session.lastModified = Date.now();

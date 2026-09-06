@@ -339,6 +339,14 @@ class Gemini extends AI {
         return `${this.config.server}/v1beta/models/${this.config.model}:countTokens?key=${this.config.apiKey}`;
     }
 
+    get lastUsageMetadata() {
+        return this._lastUsageMetadata || null;
+    }
+
+    set lastUsageMetadata(val) {
+        this._lastUsageMetadata = val;
+    }
+
     _toGeminiContents(messages) {
         const preprocessed = [];
         for (const msg of messages) {
@@ -545,12 +553,9 @@ class Gemini extends AI {
     }
 
     async tokenize(content) {
-        if (typeof content === 'string') {
-            return this._countTokens([{ role: 'user', content }]);
-        } else if (Array.isArray(content)) {
-            return this._countTokens(content);
-        }
-        return null;
+        // Return local character/heuristic estimate to avoid wasteful network round-trips
+        // Exact turn tokens are captured for free from stream usageMetadata
+        return this.estimateTokens(content);
     }
 
     async _processApiResponseStream(reader, callbacks) {
@@ -562,6 +567,7 @@ class Gemini extends AI {
         let isReasoning = false;
         let thinkingStartTime = 0;
         let totalThinkingMs = 0;
+        let latestUsageMetadata = null;
 
         try {
             while (true) {
@@ -616,6 +622,28 @@ class Gemini extends AI {
                         if (parsed.error) {
                             const errorMessage = `Gemini API Error: ${parsed.error.message} (Code: ${parsed.error.code}, Status: ${parsed.error.status})`;
                             throw new Error(errorMessage); // This will be caught by the outer try/catch of the function.
+                        }
+
+                        if (parsed.usageMetadata) {
+                            latestUsageMetadata = {
+                                ...(latestUsageMetadata || {}),
+                                ...parsed.usageMetadata
+                            };
+                            callbacks.usageMetadata = latestUsageMetadata;
+                            this._lastUsageMetadata = latestUsageMetadata;
+                            if (typeof callbacks.onUsageMetadata === 'function') {
+                                try {
+                                    callbacks.onUsageMetadata(latestUsageMetadata);
+                                } catch (e) {
+                                    console.warn("[Gemini] Error in onUsageMetadata callback:", e);
+                                }
+                            }
+                            if (typeof callbacks.onContextRatioUpdate === 'function') {
+                                const total = latestUsageMetadata.totalTokenCount || ((latestUsageMetadata.promptTokenCount || 0) + (latestUsageMetadata.candidatesTokenCount || 0));
+                                if (total > 0 && this.MAX_CONTEXT_TOKENS > 0) {
+                                    callbacks.onContextRatioUpdate(total / this.MAX_CONTEXT_TOKENS);
+                                }
+                            }
                         }
 
                         if (parsed.candidates && parsed.candidates[0]) {
@@ -710,7 +738,7 @@ class Gemini extends AI {
                     break;
                 }
             }
-            return { fullResponseAccumulator, totalThinkingMs };
+            return { fullResponseAccumulator, totalThinkingMs, usageMetadata: latestUsageMetadata };
         } catch (error) {
             if (error && error.name === 'AbortError') {
                 throw error; // Let the outer functions handle intentional aborts cleanly
@@ -748,7 +776,7 @@ class Gemini extends AI {
                 // Truncate prompt if it exceeds maxInputTokens
                 const limit = this.config.maxInputTokens;
                 if (limit > 0) {
-                    const tokens = await this._countTokens([{ role: "user", content: userPromptContent }]);
+                    const tokens = this.estimateTokens([{ role: "user", content: userPromptContent }]);
                     if (tokens > limit) {
                         const ratio = limit / tokens;
                         const keepLen = Math.floor(userPromptContent.length * ratio);
@@ -807,7 +835,7 @@ class Gemini extends AI {
                     { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" },
                 ];
 
-                const currentTokens = await this._countTokens([{ role: "user", content: userPromptContent }]);
+                const currentTokens = this.estimateTokens([{ role: "user", content: userPromptContent }]);
                 const contextRatio = currentTokens / this.MAX_CONTEXT_TOKENS;
 
                 if (onContextRatioUpdate) {
@@ -832,17 +860,34 @@ class Gemini extends AI {
                 }
 
                 const reader = response.body.getReader();
-                const { fullResponseAccumulator: fullResponse, totalThinkingMs } = await this._processApiResponseStream(reader, callbacks);
+                const { fullResponseAccumulator: fullResponse, totalThinkingMs, usageMetadata } = await this._processApiResponseStream(reader, callbacks);
                 const requestEndTime = Date.now();
                 
-                const finalTokens = await this._countTokens([{ role: "user", content: prompt }, { role: "model", content: fullResponse }]);
-                const outputTokens = Math.max(0, finalTokens - currentTokens);
+                let finalTokens;
+                let outputTokens;
+                let promptTokens = currentTokens;
+
+                if (usageMetadata && (typeof usageMetadata.totalTokenCount === 'number' || typeof usageMetadata.promptTokenCount === 'number')) {
+                    promptTokens = typeof usageMetadata.promptTokenCount === 'number' ? usageMetadata.promptTokenCount : currentTokens;
+                    outputTokens = (usageMetadata.candidatesTokenCount || 0) + (usageMetadata.thoughtsTokenCount || 0);
+                    finalTokens = typeof usageMetadata.totalTokenCount === 'number'
+                        ? usageMetadata.totalTokenCount
+                        : (promptTokens + outputTokens);
+                    if (outputTokens === 0 && finalTokens > promptTokens) {
+                        outputTokens = finalTokens - promptTokens;
+                    }
+                    console.log(`[Gemini] Token stats from usageMetadata: prompt=${promptTokens}, output=${outputTokens}, total=${finalTokens}${usageMetadata.cachedContentTokenCount ? `, cached=${usageMetadata.cachedContentTokenCount}` : ''}`);
+                } else {
+                    finalTokens = await this._countTokens([{ role: "user", content: prompt }, { role: "model", content: fullResponse }]);
+                    outputTokens = Math.max(0, finalTokens - currentTokens);
+                }
+
                 const finalContextRatio = finalTokens / this.MAX_CONTEXT_TOKENS;
 
                 this.tokenTimestamps.push({ time: Date.now(), tokens: finalTokens });
                 localStorage.setItem(`${keyId}_token_timestamps`, JSON.stringify(this.tokenTimestamps));
 
-                this.recordTelemetry(currentTokens, outputTokens, requestEndTime - requestStartTime, Math.round(totalThinkingMs / 1000));
+                this.recordTelemetry(promptTokens, outputTokens, requestEndTime - requestStartTime, Math.round(totalThinkingMs / 1000));
 
                 if (onDone) {
                     onDone(fullResponse, Math.round(finalContextRatio * 100));
@@ -921,10 +966,10 @@ class Gemini extends AI {
                     }
                     
                     let candidateMessages = processedMessages.slice(processedMessages.length - keepCount);
-                    let actualTokens = await this._countTokens(candidateMessages);
+                    let actualTokens = candidateMessages.reduce((sum, m) => sum + (typeof m.tokenCount === 'number' ? m.tokenCount : this.estimateTokens([m])), 0);
                     while (actualTokens > limit && candidateMessages.length > 1) {
                         candidateMessages.shift();
-                        actualTokens = await this._countTokens(candidateMessages);
+                        actualTokens = candidateMessages.reduce((sum, m) => sum + (typeof m.tokenCount === 'number' ? m.tokenCount : this.estimateTokens([m])), 0);
                     }
                     processedMessages = candidateMessages;
                     console.info(`[Gemini] Truncated context to ${processedMessages.length} messages (${actualTokens} tokens) to fit maxInputTokens limit of ${limit}`);
@@ -1019,7 +1064,19 @@ class Gemini extends AI {
                     { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" },
                 ];
 
-                const currentTokens = await this._countTokens(processedMessages);
+                // Calculate current tokens from recorded turn tokenCounts and estimates locally
+                // to avoid expensive and wasteful network calls to :countTokens on large conversation histories
+                let currentTokens = 0;
+                for (const msg of processedMessages) {
+                    if (typeof msg.tokenCount === 'number') {
+                        currentTokens += msg.tokenCount;
+                    } else {
+                        currentTokens += this.estimateTokens([msg]);
+                    }
+                }
+                if (effectiveSystemPrompt) {
+                    currentTokens += this.estimateTokens(effectiveSystemPrompt);
+                }
                 const contextRatio = currentTokens / this.MAX_CONTEXT_TOKENS;
 
                 if (onContextRatioUpdate) {
@@ -1044,14 +1101,35 @@ class Gemini extends AI {
                 }
 
                 const reader = response.body.getReader();
-                const { fullResponseAccumulator: fullResponse, totalThinkingMs } = await this._processApiResponseStream(reader, callbacks);
+                const { fullResponseAccumulator: fullResponse, totalThinkingMs, usageMetadata } = await this._processApiResponseStream(reader, callbacks);
                 const requestEndTime = Date.now();
                 
-                messages.push({ role: "model", content: fullResponse });
+                let finalTokens;
+                let outputTokens;
+                let promptTokens = currentTokens;
 
-                const sentMessagesWithResponse = [...processedMessages, { role: "model", content: fullResponse }];
-                const finalTokens = await this._countTokens(sentMessagesWithResponse);
-                const outputTokens = Math.max(0, finalTokens - currentTokens);
+                if (usageMetadata && (typeof usageMetadata.totalTokenCount === 'number' || typeof usageMetadata.promptTokenCount === 'number')) {
+                    promptTokens = typeof usageMetadata.promptTokenCount === 'number' ? usageMetadata.promptTokenCount : currentTokens;
+                    outputTokens = (usageMetadata.candidatesTokenCount || 0) + (usageMetadata.thoughtsTokenCount || 0);
+                    finalTokens = typeof usageMetadata.totalTokenCount === 'number'
+                        ? usageMetadata.totalTokenCount
+                        : (promptTokens + outputTokens);
+                    if (outputTokens === 0 && finalTokens > promptTokens) {
+                        outputTokens = finalTokens - promptTokens;
+                    }
+                    console.log(`[Gemini] Token stats from usageMetadata: prompt=${promptTokens}, output=${outputTokens}, total=${finalTokens}${usageMetadata.cachedContentTokenCount ? `, cached=${usageMetadata.cachedContentTokenCount}` : ''}`);
+                } else {
+                    const sentMessagesWithResponse = [...processedMessages, { role: "model", content: fullResponse }];
+                    finalTokens = await this._countTokens(sentMessagesWithResponse);
+                    outputTokens = Math.max(0, finalTokens - currentTokens);
+                }
+
+                const modelMessageObj = { role: "model", content: fullResponse };
+                if (outputTokens > 0) {
+                    modelMessageObj.tokenCount = outputTokens;
+                }
+                messages.push(modelMessageObj);
+
                 const finalContextRatio = finalTokens / this.MAX_CONTEXT_TOKENS;
                 if (onContextRatioUpdate) {
                     onContextRatioUpdate(finalContextRatio);
@@ -1061,7 +1139,7 @@ class Gemini extends AI {
                 const keyId = this.connectionId || 'gemini';
                 localStorage.setItem(`${keyId}_token_timestamps`, JSON.stringify(this.tokenTimestamps));
 
-                this.recordTelemetry(currentTokens, outputTokens, requestEndTime - requestStartTime, Math.round(totalThinkingMs / 1000));
+                this.recordTelemetry(promptTokens, outputTokens, requestEndTime - requestStartTime, Math.round(totalThinkingMs / 1000));
 
                 if (onDone) {
                     onDone(fullResponse, Math.round(finalContextRatio * 100));

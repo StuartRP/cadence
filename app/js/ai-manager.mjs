@@ -1505,7 +1505,14 @@ class AIManager {
 		});
 
 		if (!processedPrompt) return;
-		const userMessage = { role: "user", type: "user", content: processedPrompt, timestamp: Date.now(), id: crypto.randomUUID() };
+		const userMessage = {
+			role: "user",
+			type: "user",
+			content: processedPrompt,
+			timestamp: Date.now(),
+			id: crypto.randomUUID(),
+			tokenCount: connection?.estimateTokens ? connection.estimateTokens(processedPrompt) : Math.ceil(processedPrompt.length / 3.2)
+		};
 		session.messages.push(userMessage);
 		session.lastModified = Date.now();
 		await workspaceClient.setSession(sessionId, session);
@@ -2387,6 +2394,7 @@ class AIManager {
 				content: item.content,
 				timestamp: Date.now(),
 				mode: targetAgentMode ? 'outline' : 'full',
+				tokenCount: targetAI?.estimateTokens ? targetAI.estimateTokens(item.content) : Math.ceil((item.content || '').length / 3.2)
 			};
 			
 			if (targetAgentMode) {
@@ -2408,7 +2416,14 @@ class AIManager {
 		let userMessage = null;
 		let userMessageElement = null; // To hold the DOM element of the user's prompt
 		if (processedPrompt) {
-			userMessage = { role: "user", type: "user", content: processedPrompt, timestamp: Date.now(), id: crypto.randomUUID() };
+			userMessage = {
+				role: "user",
+				type: "user",
+				content: processedPrompt,
+				timestamp: Date.now(),
+				id: crypto.randomUUID(),
+				tokenCount: targetAI?.estimateTokens ? targetAI.estimateTokens(processedPrompt) : Math.ceil(processedPrompt.length / 3.2)
+			};
 			targetSession.messages.push(userMessage);
 			if (this.activeSessionId === targetSessionId) {
 				userMessageElement = this.historyManager.appendMessageElement(userMessage);
@@ -3272,6 +3287,14 @@ Output only the XML. Do not use any tools.`;
 				};
 			});
 		}
+		if (callbacks.usageMetadata) {
+			const candTokens = callbacks.usageMetadata.candidatesTokenCount || 0;
+			const thoughtTokens = callbacks.usageMetadata.thoughtsTokenCount || 0;
+			const totalOutput = candTokens + thoughtTokens;
+			if (totalOutput > 0) {
+				modelMessage.tokenCount = totalOutput;
+			}
+		}
 
 		const targetSession = sessionObj || this.activeSession;
 		const existingIndex = targetSession.messages.findIndex(m => m.id === modelMessage.id);
@@ -3660,6 +3683,14 @@ Output only the XML. Do not use any tools.`;
 							...(sig ? { thoughtSignature: sig } : {})
 						};
 					});
+				}
+				if (callbacks.usageMetadata) {
+					const candTokens = callbacks.usageMetadata.candidatesTokenCount || 0;
+					const thoughtTokens = callbacks.usageMetadata.thoughtsTokenCount || 0;
+					const totalOutput = candTokens + thoughtTokens;
+					if (totalOutput > 0) {
+						modelMessage.tokenCount = totalOutput;
+					}
 				}
 				this.activeSession.messages.push(modelMessage);
 				this.historyManager.addInteractionToLastUserMessage(userMessage);
