@@ -426,6 +426,7 @@ Snippet: ${r.snippet}`).join('\n\n');
             const startLine = options.startLine ?? options.start_line;
             const lineCount = options.lineCount ?? options.line_count;
             const endLine = options.endLine ?? options.end_line;
+            const grepQuery = options.grep ?? options.search ?? options.query;
 
             let fullContent = this._getCachedWebFetch(normalizedUrl);
 
@@ -444,6 +445,45 @@ Snippet: ${r.snippet}`).join('\n\n');
                 }
 
                 this._setCachedWebFetch(normalizedUrl, fullContent);
+            }
+
+            // If grep query is provided, search within lines and return matching lines with context
+            if (grepQuery && typeof grepQuery === 'string' && grepQuery.trim()) {
+                const lines = fullContent.split(/\r?\n/);
+                const matches = [];
+                const lowerQuery = grepQuery.trim().toLowerCase();
+
+                for (let i = 0; i < lines.length; i++) {
+                    if (lines[i].toLowerCase().includes(lowerQuery)) {
+                        matches.push(i);
+                    }
+                }
+
+                if (matches.length === 0) {
+                    return `[No matches found in ${normalizedUrl} for grep query: "${grepQuery}"]`;
+                }
+
+                let output = `Found ${matches.length} matches for "${grepQuery}" in ${normalizedUrl}:\n\n`;
+                const limit = 20;
+                const displayMatches = matches.slice(0, limit);
+
+                for (let i = 0; i < displayMatches.length; i++) {
+                    const lineIndex = displayMatches[i];
+                    output += `Match ${i + 1} (Line ${lineIndex + 1}):\n`;
+                    const startContext = Math.max(0, lineIndex - 2);
+                    const endContext = Math.min(lines.length - 1, lineIndex + 2);
+                    for (let j = startContext; j <= endContext; j++) {
+                        const prefix = j === lineIndex ? ">" : " ";
+                        output += `Line ${j + 1}: ${prefix}  ${lines[j]}\n`;
+                    }
+                    output += `\n`;
+                }
+
+                if (matches.length > limit) {
+                    output += `[Warning: ${matches.length - limit} additional matches omitted. Use startLine/lineCount to inspect specific regions.]`;
+                }
+
+                return output.trim();
             }
 
             // If line range is specified, slice by lines (1-indexed) matching readFile behavior

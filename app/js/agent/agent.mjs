@@ -886,8 +886,11 @@ export class Agent {
 						const count = parseInt(toolCall.arguments.line_count ?? toolCall.arguments.lineCount);
 						const endVal = parseInt(toolCall.arguments.end_line ?? toolCall.arguments.endLine);
 						const noSummary = !!(toolCall.arguments.no_summary ?? toolCall.arguments.noSummary);
+						const grep = toolCall.arguments.grep ?? toolCall.arguments.search ?? toolCall.arguments.query;
 						let suffix = "";
-						if (!isNaN(start) && !isNaN(count)) {
+						if (grep && typeof grep === 'string' && grep.trim()) {
+							suffix += ` grep:"${grep.trim()}"`;
+						} else if (!isNaN(start) && !isNaN(count)) {
 							const calculatedEnd = start + count - 1;
 							suffix += calculatedEnd > start ? ` #L${start}-${calculatedEnd}` : ` #L${start}`;
 						} else if (!isNaN(start) && !isNaN(endVal)) {

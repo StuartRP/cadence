@@ -353,7 +353,7 @@ export const tools = [
 	{
 		name: "web_fetch",
 		description:
-			"Fetch a web URL. Set `no_summary: true` to return full content without AI summarisation. Use `startLine` and `lineCount` to read specific portions.",
+			"Fetch a web URL. Set `no_summary: true` to return full content without AI summarisation. Use `startLine` and `lineCount` to read specific portions. Use `grep` to search within the page lines and locate relevant line numbers.",
 		parameters: {
 			type: "object",
 			properties: {
@@ -365,6 +365,10 @@ export const tools = [
 				},
 				startLine: { type: "number", description: "Starting line (1-indexed) to read from the content." },
 				lineCount: { type: "number", description: "Number of lines to read." },
+				grep: {
+					type: "string",
+					description: "Search query to find matching lines and line numbers in the fetched content with surrounding context.",
+				},
 			},
 			required: ["url"],
 		},

@@ -614,18 +614,24 @@ export default class AIManagerMessageRenderer {
                     const rawUrl = args.url.trim();
                     const displayUrl = rawUrl.length > 55 ? rawUrl.substring(0, 55) + "..." : rawUrl;
                     let urlSuffix = "";
-                    const start = parseInt(args.startLine ?? args.startline ?? args.start_line ?? args.start, 10);
-                    const count = parseInt(args.lineCount ?? args.linecount ?? args.line_count ?? args.count, 10);
-                    const end = parseInt(args.endLine ?? args.endline ?? args.end_line ?? args.end, 10);
-                    if (!isNaN(start) && !isNaN(count)) {
-                        const calculatedEnd = start + count - 1;
-                        urlSuffix += calculatedEnd > start ? ` #L${start}-${calculatedEnd}` : ` #L${start}`;
-                    } else if (!isNaN(start) && !isNaN(end)) {
-                        urlSuffix += ` #L${start}-${end}`;
-                    } else if (!isNaN(start)) {
-                        urlSuffix += ` #L${start}`;
-                    } else if (!isNaN(count) && count > 0) {
-                        urlSuffix += ` #L1-${count}`;
+                    const grep = args.grep ?? args.search ?? args.query;
+                    if (grep && typeof grep === 'string' && grep.trim()) {
+                        const shortGrep = grep.trim().length > 25 ? grep.trim().substring(0, 25) + "..." : grep.trim();
+                        urlSuffix += ` grep:"${shortGrep}"`;
+                    } else {
+                        const start = parseInt(args.startLine ?? args.startline ?? args.start_line ?? args.start, 10);
+                        const count = parseInt(args.lineCount ?? args.linecount ?? args.line_count ?? args.count, 10);
+                        const end = parseInt(args.endLine ?? args.endline ?? args.end_line ?? args.end, 10);
+                        if (!isNaN(start) && !isNaN(count)) {
+                            const calculatedEnd = start + count - 1;
+                            urlSuffix += calculatedEnd > start ? ` #L${start}-${calculatedEnd}` : ` #L${start}`;
+                        } else if (!isNaN(start) && !isNaN(end)) {
+                            urlSuffix += ` #L${start}-${end}`;
+                        } else if (!isNaN(start)) {
+                            urlSuffix += ` #L${start}`;
+                        } else if (!isNaN(count) && count > 0) {
+                            urlSuffix += ` #L1-${count}`;
+                        }
                     }
                     if (args.no_summary || args.noSummary) {
                         urlSuffix += ` (raw)`;
@@ -845,18 +851,24 @@ export default class AIManagerMessageRenderer {
             const rawUrl = (args.url || "").trim();
             const displayUrl = rawUrl.length > 55 ? rawUrl.substring(0, 55) + "..." : rawUrl;
             let urlSuffix = "";
-            const start = parseInt(args.startLine ?? args.startline ?? args.start_line ?? args.start, 10);
-            const count = parseInt(args.lineCount ?? args.linecount ?? args.line_count ?? args.count, 10);
-            const end = parseInt(args.endLine ?? args.endline ?? args.end_line ?? args.end, 10);
-            if (!isNaN(start) && !isNaN(count)) {
-                const calculatedEnd = start + count - 1;
-                urlSuffix += calculatedEnd > start ? ` #L${start}-${calculatedEnd}` : ` #L${start}`;
-            } else if (!isNaN(start) && !isNaN(end)) {
-                urlSuffix += ` #L${start}-${end}`;
-            } else if (!isNaN(start)) {
-                urlSuffix += ` #L${start}`;
-            } else if (!isNaN(count) && count > 0) {
-                urlSuffix += ` #L1-${count}`;
+            const grep = args.grep ?? args.search ?? args.query;
+            if (grep && typeof grep === 'string' && grep.trim()) {
+                const shortGrep = grep.trim().length > 25 ? grep.trim().substring(0, 25) + "..." : grep.trim();
+                urlSuffix += ` grep:"${shortGrep}"`;
+            } else {
+                const start = parseInt(args.startLine ?? args.startline ?? args.start_line ?? args.start, 10);
+                const count = parseInt(args.lineCount ?? args.linecount ?? args.line_count ?? args.count, 10);
+                const end = parseInt(args.endLine ?? args.endline ?? args.end_line ?? args.end, 10);
+                if (!isNaN(start) && !isNaN(count)) {
+                    const calculatedEnd = start + count - 1;
+                    urlSuffix += calculatedEnd > start ? ` #L${start}-${calculatedEnd}` : ` #L${start}`;
+                } else if (!isNaN(start) && !isNaN(end)) {
+                    urlSuffix += ` #L${start}-${end}`;
+                } else if (!isNaN(start)) {
+                    urlSuffix += ` #L${start}`;
+                } else if (!isNaN(count) && count > 0) {
+                    urlSuffix += ` #L1-${count}`;
+                }
             }
             if (args.no_summary || args.noSummary) {
                 urlSuffix += ` (raw)`;
@@ -1066,18 +1078,24 @@ export default class AIManagerMessageRenderer {
             if (args.url) {
                 const rawUrl = (args.url || '').trim();
                 let text = rawUrl.length > 30 ? rawUrl.substring(0, 30) + "..." : rawUrl;
-                const start = parseInt(args.startLine ?? args.startline ?? args.start_line ?? args.start, 10);
-                const count = parseInt(args.lineCount ?? args.linecount ?? args.line_count ?? args.count, 10);
-                const end = parseInt(args.endLine ?? args.endline ?? args.end_line ?? args.end, 10);
-                if (!isNaN(start) && !isNaN(count)) {
-                    const calculatedEnd = start + count - 1;
-                    text += calculatedEnd > start ? ` #L${start}-${calculatedEnd}` : ` #L${start}`;
-                } else if (!isNaN(start) && !isNaN(end)) {
-                    text += ` #L${start}-${end}`;
-                } else if (!isNaN(start)) {
-                    text += ` #L${start}`;
-                } else if (!isNaN(count) && count > 0) {
-                    text += ` #L1-${count}`;
+                const grep = args.grep ?? args.search ?? args.query;
+                if (grep && typeof grep === 'string' && grep.trim()) {
+                    const shortGrep = grep.trim().length > 15 ? grep.trim().substring(0, 15) + "..." : grep.trim();
+                    text += ` grep:"${shortGrep}"`;
+                } else {
+                    const start = parseInt(args.startLine ?? args.startline ?? args.start_line ?? args.start, 10);
+                    const count = parseInt(args.lineCount ?? args.linecount ?? args.line_count ?? args.count, 10);
+                    const end = parseInt(args.endLine ?? args.endline ?? args.end_line ?? args.end, 10);
+                    if (!isNaN(start) && !isNaN(count)) {
+                        const calculatedEnd = start + count - 1;
+                        text += calculatedEnd > start ? ` #L${start}-${calculatedEnd}` : ` #L${start}`;
+                    } else if (!isNaN(start) && !isNaN(end)) {
+                        text += ` #L${start}-${end}`;
+                    } else if (!isNaN(start)) {
+                        text += ` #L${start}`;
+                    } else if (!isNaN(count) && count > 0) {
+                        text += ` #L1-${count}`;
+                    }
                 }
                 if (args.no_summary || args.noSummary) {
                     text += ` (raw)`;
