@@ -613,7 +613,24 @@ export default class AIManagerMessageRenderer {
                 if (args.url) {
                     const rawUrl = args.url.trim();
                     const displayUrl = rawUrl.length > 55 ? rawUrl.substring(0, 55) + "..." : rawUrl;
-                    label = `<code>${toolName}:</code> <a href="${this._escapeHtml(rawUrl)}" target="_blank" rel="noopener noreferrer" class="tool-call-link" title="${this._escapeHtml(rawUrl)}">${this._escapeHtml(displayUrl)}</a>`;
+                    let urlSuffix = "";
+                    const start = parseInt(args.startLine ?? args.startline ?? args.start_line ?? args.start, 10);
+                    const count = parseInt(args.lineCount ?? args.linecount ?? args.line_count ?? args.count, 10);
+                    const end = parseInt(args.endLine ?? args.endline ?? args.end_line ?? args.end, 10);
+                    if (!isNaN(start) && !isNaN(count)) {
+                        const calculatedEnd = start + count - 1;
+                        urlSuffix += calculatedEnd > start ? ` #L${start}-${calculatedEnd}` : ` #L${start}`;
+                    } else if (!isNaN(start) && !isNaN(end)) {
+                        urlSuffix += ` #L${start}-${end}`;
+                    } else if (!isNaN(start)) {
+                        urlSuffix += ` #L${start}`;
+                    } else if (!isNaN(count) && count > 0) {
+                        urlSuffix += ` #L1-${count}`;
+                    }
+                    if (args.no_summary || args.noSummary) {
+                        urlSuffix += ` (raw)`;
+                    }
+                    label = `<code>${toolName}:</code> <a href="${this._escapeHtml(rawUrl)}" target="_blank" rel="noopener noreferrer" class="tool-call-link" title="${this._escapeHtml(rawUrl)}">${this._escapeHtml(displayUrl)}</a>${urlSuffix ? ` <span class="tool-call-range" style="opacity: 0.8; font-family: monospace;">${this._escapeHtml(urlSuffix)}</span>` : ""}`;
                 } else if (args.path) {
                     if (fileActions.includes(toolName)) {
                         const shortFile = args.path.split('/').pop() || args.path;
@@ -823,7 +840,24 @@ export default class AIManagerMessageRenderer {
         if (args.url) {
             const rawUrl = (args.url || "").trim();
             const displayUrl = rawUrl.length > 55 ? rawUrl.substring(0, 55) + "..." : rawUrl;
-            label = `<code>${toolName}:</code> <a href="${this._escapeHtml(rawUrl)}" target="_blank" rel="noopener noreferrer" class="tool-call-link" title="${this._escapeHtml(rawUrl)}">${this._escapeHtml(displayUrl)}</a>`;
+            let urlSuffix = "";
+            const start = parseInt(args.startLine ?? args.startline ?? args.start_line ?? args.start, 10);
+            const count = parseInt(args.lineCount ?? args.linecount ?? args.line_count ?? args.count, 10);
+            const end = parseInt(args.endLine ?? args.endline ?? args.end_line ?? args.end, 10);
+            if (!isNaN(start) && !isNaN(count)) {
+                const calculatedEnd = start + count - 1;
+                urlSuffix += calculatedEnd > start ? ` #L${start}-${calculatedEnd}` : ` #L${start}`;
+            } else if (!isNaN(start) && !isNaN(end)) {
+                urlSuffix += ` #L${start}-${end}`;
+            } else if (!isNaN(start)) {
+                urlSuffix += ` #L${start}`;
+            } else if (!isNaN(count) && count > 0) {
+                urlSuffix += ` #L1-${count}`;
+            }
+            if (args.no_summary || args.noSummary) {
+                urlSuffix += ` (raw)`;
+            }
+            label = `<code>${toolName}:</code> <a href="${this._escapeHtml(rawUrl)}" target="_blank" rel="noopener noreferrer" class="tool-call-link" title="${this._escapeHtml(rawUrl)}">${this._escapeHtml(displayUrl)}</a>${urlSuffix ? ` <span class="tool-call-range" style="opacity: 0.8; font-family: monospace;">${this._escapeHtml(urlSuffix)}</span>` : ""}`;
         } else if (args.path) {
             if (fileActions.includes(toolName)) {
                 const shortFile = args.path.split('/').pop() || args.path;
@@ -1022,7 +1056,24 @@ export default class AIManagerMessageRenderer {
             if (!args) return "";
             if (args.url) {
                 const rawUrl = (args.url || '').trim();
-                return rawUrl.length > 30 ? rawUrl.substring(0, 30) + "..." : rawUrl;
+                let text = rawUrl.length > 30 ? rawUrl.substring(0, 30) + "..." : rawUrl;
+                const start = parseInt(args.startLine ?? args.startline ?? args.start_line ?? args.start, 10);
+                const count = parseInt(args.lineCount ?? args.linecount ?? args.line_count ?? args.count, 10);
+                const end = parseInt(args.endLine ?? args.endline ?? args.end_line ?? args.end, 10);
+                if (!isNaN(start) && !isNaN(count)) {
+                    const calculatedEnd = start + count - 1;
+                    text += calculatedEnd > start ? ` #L${start}-${calculatedEnd}` : ` #L${start}`;
+                } else if (!isNaN(start) && !isNaN(end)) {
+                    text += ` #L${start}-${end}`;
+                } else if (!isNaN(start)) {
+                    text += ` #L${start}`;
+                } else if (!isNaN(count) && count > 0) {
+                    text += ` #L1-${count}`;
+                }
+                if (args.no_summary || args.noSummary) {
+                    text += ` (raw)`;
+                }
+                return text;
             } else if (args.command) {
                 const shortCmd = args.command.length > 30 ? args.command.substring(0, 30) + "..." : args.command;
                 const cwdVal = args.cwd || args.dir;

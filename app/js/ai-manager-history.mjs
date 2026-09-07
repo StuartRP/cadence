@@ -2362,6 +2362,7 @@ class AIManagerHistory {
 			}
 			delete session.implementationPlanTokenCount;
 			delete session.taskListTokenCount;
+			delete session.scratchpadTokenCount;
 			session.tokenizedForProvider = this.ai.providerId;
 			updated = true;
 		}
@@ -2423,6 +2424,18 @@ class AIManagerHistory {
 			}
 		} else if (!session.taskList && session.taskListTokenCount !== undefined) {
 			delete session.taskListTokenCount;
+			updated = true;
+		}
+
+		if (session.scratchpad && typeof session.scratchpadTokenCount !== 'number') {
+			const textToTokenize = `EVERGREEN SCRATCHPAD NOTES:\n${session.scratchpad}`;
+			const count = await this.ai.tokenize(textToTokenize);
+			if (typeof count === 'number') {
+				session.scratchpadTokenCount = count;
+				updated = true;
+			}
+		} else if (!session.scratchpad && session.scratchpadTokenCount !== undefined) {
+			delete session.scratchpadTokenCount;
 			updated = true;
 		}
 
@@ -2847,6 +2860,13 @@ class AIManagerHistory {
 					tokenCount: targetSession.taskListTokenCount
 				}]);
 			}
+			if (targetSession?.scratchpad) {
+				extraTokens += this.ai.estimateTokens([{
+					role: "system",
+					content: `EVERGREEN SCRATCHPAD NOTES:\n${targetSession.scratchpad}`,
+					tokenCount: targetSession.scratchpadTokenCount
+				}]);
+			}
 		}
 		if (taskStateMessage) {
 			extraTokens += this.ai.estimateTokens([{
@@ -3163,6 +3183,13 @@ class AIManagerHistory {
 					role: "system",
 					content: `EVERGREEN TASK LIST:\n${targetSession.taskList}`,
 					tokenCount: targetSession.taskListTokenCount
+				});
+			}
+			if (targetSession?.scratchpad) {
+				contextForAI.push({
+					role: "system",
+					content: `EVERGREEN SCRATCHPAD NOTES:\n${targetSession.scratchpad}`,
+					tokenCount: targetSession.scratchpadTokenCount
 				});
 			}
 		}

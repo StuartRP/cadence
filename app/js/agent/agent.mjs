@@ -880,6 +880,27 @@ export class Agent {
 						} else {
 							responseTitle = `[Tool Response: read_file ${path}]`;
 						}
+					} else if (toolCall.name === "web_fetch" && toolCall.arguments && toolCall.arguments.url) {
+						const url = toolCall.arguments.url;
+						const start = parseInt(toolCall.arguments.start_line ?? toolCall.arguments.startLine);
+						const count = parseInt(toolCall.arguments.line_count ?? toolCall.arguments.lineCount);
+						const endVal = parseInt(toolCall.arguments.end_line ?? toolCall.arguments.endLine);
+						const noSummary = !!(toolCall.arguments.no_summary ?? toolCall.arguments.noSummary);
+						let suffix = "";
+						if (!isNaN(start) && !isNaN(count)) {
+							const calculatedEnd = start + count - 1;
+							suffix += calculatedEnd > start ? ` #L${start}-${calculatedEnd}` : ` #L${start}`;
+						} else if (!isNaN(start) && !isNaN(endVal)) {
+							suffix += ` #L${start}-${endVal}`;
+						} else if (!isNaN(start)) {
+							suffix += ` #L${start}`;
+						} else if (!isNaN(count) && count > 0) {
+							suffix += ` #L1-${count}`;
+						}
+						if (noSummary) {
+							suffix += ` (raw)`;
+						}
+						responseTitle = `[Tool Response: web_fetch ${url}${suffix}]`;
 					}
 					accumulatedResponses.push(`${responseTitle}\n\n${toolResult}`);
 

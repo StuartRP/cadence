@@ -2050,6 +2050,8 @@ class AIManager {
 
 		const shouldPassSessionData = this.activeSession && type !== "session_deleted" && type !== "session_closed";
 
+		const isSync = !!this.sessionsManager?._isSyncingFromBroadcast;
+
 		const eventDetail = {
 			aiProvider: this.aiProvider,
 			runMode: "chat", // Always chat mode now
@@ -2057,6 +2059,7 @@ class AIManager {
 			estimatedWindow: estimatedWindow,
 			maxContextTokens: maxContextTokens,
 			type: type,
+			isSync: isSync,
 			// NEW: Pass the metadata for workspace and a deep copy of the full active session for IndexedDB save
 			aiSessionsMetadata: {
 				activeSessionId: this.activeSessionId,
@@ -2072,15 +2075,31 @@ class AIManager {
 
 		this.panel.dispatchEvent(new CustomEvent("context-update", { detail: eventDetail }))
 
-		if (this.sessionsManager?._broadcast && this.activeSession && type !== "session_deleted" && type !== "session_closed" && type !== "tokens_updated") {
+		// If this update was triggered by an incoming cross-tab sync, do not echo back or trigger background saves
+		if (isSync) {
+			return;
+		}
+
+		const nonBroadcastTypes = [
+			"session_switched",
+			"session_messages_loaded",
+			"tokens_updated",
+			"session_deleted",
+			"session_closed",
+			"session_renamed",
+			"ai_connection_switched"
+		];
+
+		if (this.sessionsManager?._broadcast && this.activeSession && !nonBroadcastTypes.includes(type)) {
 			this.sessionsManager._broadcast('session_updated', {
 				sessionId: this.activeSession.id,
 				lastModified: this.activeSession.lastModified,
+				revision: this.activeSession.revision,
 				name: this.activeSession.name
 			});
 		}
 
-		if (this.activeSession && type !== "session_deleted" && type !== "session_closed" && type !== "tokens_updated") {
+		if (this.activeSession && !nonBroadcastTypes.includes(type)) {
 			this.historyManager.updateMessageTokenCounts(this.activeSession).catch(err => {
 				console.warn("[AIManager] Failed to update background token counts:", err);
 			});

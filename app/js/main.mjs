@@ -3647,10 +3647,10 @@ setTimeout(async () => {
 	// This is now handled within ai-manager for activeSession.promptHistory
 
 	ui.aiManager.panel.addEventListener("context-update", async (event) => {
-		const { aiSessionsMetadata, activeSessionData, type } = event.detail
+		const { aiSessionsMetadata, activeSessionData, type, isSync } = event.detail
 
 		// 1. Update workspace metadata (lightweight save)
-		if (aiSessionsMetadata) {
+		if (aiSessionsMetadata && !isSync && type !== "session_messages_loaded") {
 			workspace.aiSessionsMetadata = aiSessionsMetadata.sessions
 			workspace.activeAiSessionId = aiSessionsMetadata.activeSessionId
 			clearTimeout(ui.aiManager.saveWorkspaceTimeout)
@@ -3659,9 +3659,17 @@ setTimeout(async () => {
 		}
 
 		// 2. Save the full active session data to backend (on demand)
-		// Skip types that already perform their own atomic persistence (tokens_updated, session_switched)
-		const alreadyPersisted = type === "tokens_updated" || type === "session_switched";
-		if (activeSessionData && activeSessionData.id && !alreadyPersisted) {
+		// Skip types that already perform their own atomic persistence, read-only UI events, or incoming cross-tab sync
+		const nonSavingTypes = [
+			"tokens_updated",
+			"session_switched",
+			"session_messages_loaded",
+			"session_deleted",
+			"session_closed",
+			"session_renamed"
+		];
+		const shouldSkipSave = isSync || nonSavingTypes.includes(type);
+		if (activeSessionData && activeSessionData.id && !shouldSkipSave) {
 			clearTimeout(ui.aiManager.saveActiveSessionTimeout);
 			ui.aiManager.saveActiveSessionTimeout = setTimeout(async () => {
 				try {

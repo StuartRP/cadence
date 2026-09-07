@@ -56,7 +56,7 @@ export class UIAccordion extends Block {
             if (e.target.closest("button") || e.target.closest(".header-actions")) return;
             const session = ui.aiManager.activeSession;
             if (!session) return;
-            session._accordionStates = session._accordionStates || { settings: false, plan: true, tasks: true, backups: true };
+            session._accordionStates = session._accordionStates || { settings: false, plan: true, tasks: true, backups: true, scratchpad: true };
 
             const isExpanded = this.classList.toggle("expanded");
             session._accordionStates[this.sectionKey] = isExpanded;
@@ -89,8 +89,8 @@ export class SessionArtifactsPanel extends Block {
 
         // Active Ace Editor instances
         this.planEditorInstance = null;
-
         this.tasksEditorInstance = null;
+        this.scratchpadEditorInstance = null;
 
         // Build the outer scroll container programmatically
         this.container = document.createElement("div");
@@ -103,10 +103,13 @@ export class SessionArtifactsPanel extends Block {
         // 2. Edit History & Rollbacks Accordion
         this._buildBackupsAccordion();
 
-        // 3. Task Checklist Accordion
+        // 3. Scratchpad Accordion
+        this._buildScratchpadAccordion();
+
+        // 4. Task Checklist Accordion
         this._buildTasksAccordion();
 
-        // 4. Implementation Plan Accordion
+        // 5. Implementation Plan Accordion
         this._buildPlanAccordion();
     }
 
@@ -176,6 +179,14 @@ export class SessionArtifactsPanel extends Block {
             const wrapper = document.createElement("div");
             wrapper.className = "toggle-row number-input-row";
 
+            const input = document.createElement("input");
+            input.type = "number";
+            input.id = id;
+            input.min = min;
+            input.max = max;
+            input.value = defaultVal;
+            input.className = "setting-number-input";
+
             const meta = document.createElement("div");
             meta.className = "setting-meta";
 
@@ -190,22 +201,8 @@ export class SessionArtifactsPanel extends Block {
             meta.appendChild(titleSpan);
             meta.appendChild(descSpan);
 
-            const input = document.createElement("input");
-            input.type = "number";
-            input.id = id;
-            input.min = min;
-            input.max = max;
-            input.value = defaultVal;
-            input.className = "setting-number-input";
-            input.style.width = "65px";
-            input.style.padding = "4px 8px";
-            input.style.borderRadius = "var(--borderRadius)";
-            input.style.border = "1px solid var(--border-primary)";
-            input.style.background = "var(--bg-secondary)";
-            input.style.color = "var(--text-primary)";
-
-            wrapper.appendChild(meta);
             wrapper.appendChild(input);
+            wrapper.appendChild(meta);
             grid.appendChild(wrapper);
 
             return input;
@@ -488,6 +485,121 @@ export class SessionArtifactsPanel extends Block {
         this.container.appendChild(this.backupsAccordion);
     }
 
+    _buildScratchpadAccordion() {
+        this.scratchpadAccordion = new UIAccordion("scratchpad", "Scratchpad", "sticky_note_2", "#e5a50a", true, "edit-scratchpad-btn");
+        this.scratchpadItem = this.scratchpadAccordion;
+        this.scratchpadContentWrapper = this.scratchpadAccordion.content;
+        this.scratchpadArrow = this.scratchpadAccordion.arrow;
+        this.scratchpadBtn = this.scratchpadAccordion.editBtn;
+
+        this.clearScratchpadBtn = new Button("Clear");
+        this.clearScratchpadBtn.className = "clear-btn clear-scratchpad-btn";
+        this.clearScratchpadBtn.icon = "delete_sweep";
+        this.scratchpadAccordion.rightContainer.insertBefore(this.clearScratchpadBtn, this.scratchpadArrow);
+
+        this.clearScratchpadBtn.onclick = async (e) => {
+            if (e) e.stopPropagation();
+            const session = ui.aiManager.activeSession;
+            if (!session || !session.scratchpad) return;
+
+            const confirmed = await window.modal.confirm("Are you sure you want to clear the scratchpad notes?", "Clear Scratchpad");
+            if (!confirmed) return;
+
+            delete session.scratchpad;
+            delete session.scratchpadTokenCount;
+            session.lastModified = Date.now();
+            await workspaceClient.setSession(session.id, session);
+
+            if (this.scratchpadEditorInstance) {
+                this.scratchpadEditorInstance.destroy();
+                this.scratchpadEditorInstance = null;
+                this.scratchpadBtn.text = "Edit";
+                this.scratchpadBtn.icon = "edit";
+                this.scratchpadBtn.className = "edit-scratchpad-btn";
+            }
+
+            this.scratchpadContent.innerHTML = `<span class="empty-state">No scratchpad notes recorded. Cadence will keep notes here.</span>`;
+            if (window.modal?.toast) {
+                window.modal.toast("Scratchpad cleared.");
+            }
+        };
+
+        this.scratchpadContentWrapper.classList.add("scratchpad-content-wrapper");
+
+        this.scratchpadContent = document.createElement("div");
+        this.scratchpadContent.className = "pane-content markdown-body scratchpad-content";
+        this.scratchpadContentWrapper.appendChild(this.scratchpadContent);
+
+        this.container.appendChild(this.scratchpadAccordion);
+
+        this.scratchpadBtn.onclick = async (e) => {
+            if (e) e.stopPropagation();
+            const session = ui.aiManager.activeSession;
+            if (!session) return;
+
+            if (!this.scratchpadEditorInstance) {
+                this.scratchpadBtn.text = "Save";
+                this.scratchpadBtn.icon = "save";
+                this.scratchpadBtn.className = "apply";
+
+                const currentHeight = this.scratchpadContent.offsetHeight;
+                const rawMarkdown = session.scratchpad || "";
+                const editorHeight = Math.max(currentHeight, 150);
+
+                this.scratchpadContent.innerHTML = "";
+                const editorDiv = document.createElement("div");
+                editorDiv.className = "scratchpad-ace-editor";
+                editorDiv.style.height = `${editorHeight}px`;
+                editorDiv.style.width = "100%";
+                editorDiv.style.position = "relative";
+                this.scratchpadContent.appendChild(editorDiv);
+
+                this.scratchpadEditorInstance = window.ace.edit(editorDiv);
+                const theme = window.leftEdit?.renderer?.getTheme() || "ace/theme/tomorrow_night";
+                this.scratchpadEditorInstance.setTheme(theme);
+                this.scratchpadEditorInstance.session.setMode("ace/mode/markdown");
+                this.scratchpadEditorInstance.setValue(rawMarkdown, -1);
+                this.scratchpadEditorInstance.setFontSize(12);
+                this.scratchpadEditorInstance.setShowPrintMargin(false);
+                this.scratchpadEditorInstance.renderer.setShowGutter(true);
+                this.scratchpadEditorInstance.focus();
+            } else {
+                const newValue = this.scratchpadEditorInstance.getValue();
+                const byteSize = new TextEncoder().encode(newValue).length;
+                if (byteSize > 4096) {
+                    if (window.modal?.notice) {
+                        await window.modal.notice(`Scratchpad content exceeds 4KB limit (${byteSize} bytes / 4096 bytes max). Please keep your notes concise.`, "Limit Exceeded");
+                    }
+                    return;
+                }
+
+                if (newValue.trim()) {
+                    session.scratchpad = newValue.trim();
+                } else {
+                    delete session.scratchpad;
+                }
+                delete session.scratchpadTokenCount;
+
+                this.scratchpadEditorInstance.destroy();
+                this.scratchpadEditorInstance = null;
+
+                try {
+                    await workspaceClient.setSession(session.id, session);
+                } catch (err) {
+                    console.error("[SessionArtifactsPanel] Error saving scratchpad:", err);
+                }
+
+                this.scratchpadContent.innerHTML = session.scratchpad 
+                    ? ui.aiManager.md.render(session.scratchpad)
+                    : `<span class="empty-state">No scratchpad notes recorded. Cadence will keep notes here.</span>`;
+
+                this.scratchpadBtn.text = "Edit";
+                this.scratchpadBtn.icon = "edit";
+                this.scratchpadBtn.className = "edit-scratchpad-btn";
+            }
+        };
+    }
+
     async update() {
         if (this.isUpdating) return;
         this.isUpdating = true;
@@ -505,17 +617,19 @@ export class SessionArtifactsPanel extends Block {
             this.container.innerHTML = "";
             this.container.appendChild(this.settingsItem);
             this.container.appendChild(this.backupsItem);
+            this.container.appendChild(this.scratchpadItem);
             this.container.appendChild(this.tasksItem);
             this.container.appendChild(this.planItem);
         }
 
         // Restore accordion expanded states
-        session._accordionStates = session._accordionStates || { settings: false, plan: true, tasks: true, backups: true };
+        session._accordionStates = session._accordionStates || { settings: false, plan: true, tasks: true, backups: true, scratchpad: true };
         
         this.settingsAccordion.applyState(session._accordionStates.settings !== false);
         this.planAccordion.applyState(session._accordionStates.plan !== false);
         this.tasksAccordion.applyState(session._accordionStates.tasks !== false);
         this.backupsAccordion.applyState(session._accordionStates.backups !== false);
+        this.scratchpadAccordion.applyState(session._accordionStates.scratchpad !== false);
 
         // Update checkbox toggles and numeric inputs
         this.agentModeCheckbox.checked = session.agentMode ?? (ui.aiManager.agentMode || false);
@@ -549,6 +663,17 @@ export class SessionArtifactsPanel extends Block {
             this.tasksBtn.text = "Edit";
             this.tasksBtn.icon = "edit";
             this.tasksBtn.className = "edit-tasks-btn";
+        }
+
+        // Render scratchpad content if not editing
+        if (!this.scratchpadEditorInstance) {
+            this.scratchpadContent.innerHTML = session.scratchpad 
+                ? ui.aiManager.md.render(session.scratchpad)
+                : `<span class="empty-state">No scratchpad notes recorded. Cadence will keep notes here.</span>`;
+
+            this.scratchpadBtn.text = "Edit";
+            this.scratchpadBtn.icon = "edit";
+            this.scratchpadBtn.className = "edit-scratchpad-btn";
         }
 
         // Render modified file backups list using programmatic DOM manipulation

@@ -17,6 +17,7 @@ class AIManagerSessions {
 
 		// Cross-tab synchronization via BroadcastChannel
 		this.instanceId = crypto.randomUUID();
+		this._isSyncingFromBroadcast = false;
 		this.broadcastChannel = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('cadence_ai_sessions') : null;
 		if (this.broadcastChannel) {
 			this.broadcastChannel.onmessage = (e) => this._handleBroadcast(e.data);
@@ -46,16 +47,30 @@ class AIManagerSessions {
 					}
 					// If this session is currently active and this tab is not actively processing, reload so it stays in sync
 					if (this.activeSessionId === msg.sessionId && !this.manager._isProcessing) {
+						// Don't re-fetch if our in-memory session is already as new or newer than the broadcasted state
+						if (this.activeSession && msg.lastModified && this.activeSession.lastModified && this.activeSession.lastModified >= msg.lastModified) {
+							return;
+						}
+						if (this.activeSession && msg.revision !== undefined && this.activeSession.revision !== undefined && this.activeSession.revision >= msg.revision) {
+							return;
+						}
 						try {
+							this._isSyncingFromBroadcast = true;
 							const updatedSession = await workspaceClient.getSession(msg.sessionId);
 							if (updatedSession) {
+								if (this.activeSession && updatedSession.lastModified && this.activeSession.lastModified > updatedSession.lastModified) {
+									return;
+								}
 								const { session: migratedSession } = SessionMigrator.migrate(updatedSession);
 								this.activeSession = migratedSession;
 								this.manager.historyManager.loadSessionMessages(migratedSession.messages, false);
 								this.manager._updateAIInfoDisplay();
+								this.manager._updateAgentProgressPanel?.();
 							}
 						} catch (e) {
 							console.warn("[AIManagerSessions] Cross-tab sync fetch failed:", e);
+						} finally {
+							this._isSyncingFromBroadcast = false;
 						}
 					}
 				}
@@ -199,7 +214,7 @@ class AIManagerSessions {
 			allowSubAgents: defaultSubAgents,
 			allowRunCommand: defaultRunCommand,
 			pinnedSkills: [],
-			pinnedRoots: [],
+			pinnedRoots: [...(this.activeSession?.pinnedRoots || [])],
 		};
 
 		await workspaceClient.setSession(newId, newSessionData);
@@ -349,12 +364,14 @@ class AIManagerSessions {
 			if (this.manager.aiInfoDisplay && this.manager.aiInfoDisplay.value) {
 				this.activeSession.connectionId = this.manager.aiInfoDisplay.value;
 			}
+			const now = Date.now();
+			this.activeSession.lastModified = now;
 			const currentSessionMeta = this.allSessionMetadata.find(s => s.id === this.activeSession.id);
-			if (currentSessionMeta) currentSessionMeta.lastModified = Date.now();
+			if (currentSessionMeta) currentSessionMeta.lastModified = now;
 			await workspaceClient.setSession(this.activeSession.id, this.activeSession);
 			this._broadcast('session_updated', {
 				sessionId: this.activeSession.id,
-				lastModified: this.activeSession.lastModified,
+				lastModified: now,
 				name: this.activeSession.name,
 				connectionId: this.activeSession.connectionId
 			});
