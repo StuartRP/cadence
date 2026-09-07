@@ -2853,21 +2853,42 @@ class AIManager {
 
 			let detailHtml = "";
 			if (toolCall.name === "edit_file") {
+				const args = toolCall.arguments || {};
+				let diffSections = "";
+				if (Array.isArray(args.edits) && args.edits.length > 0) {
+					diffSections = args.edits.map((ed, i) => `
+						<div class="diff-edit-item" style="margin-bottom: 8px;">
+							${args.edits.length > 1 ? `<div style="font-size: 11px; font-weight: bold; margin-bottom: 4px; opacity: 0.8;">Edit ${i + 1} of ${args.edits.length}:</div>` : ''}
+							<div class="diff-section remove">
+								<span class="diff-label">Remove:</span>
+								<pre><code>${this._escapeHtml(ed.search || ed.searchString || "")}</code></pre>
+							</div>
+							<div class="diff-section add">
+								<span class="diff-label">Add:</span>
+								<pre><code>${this._escapeHtml(ed.replace !== undefined ? ed.replace : (ed.replacementString ?? ""))}</code></pre>
+							</div>
+						</div>
+					`).join("");
+				} else {
+					diffSections = `
+						<div class="diff-section remove">
+							<span class="diff-label">Remove:</span>
+							<pre><code>${this._escapeHtml(args.search || args.searchString || "")}</code></pre>
+						</div>
+						<div class="diff-section add">
+							<span class="diff-label">Add:</span>
+							<pre><code>${this._escapeHtml(args.replace !== undefined ? args.replace : (args.replacementString ?? ""))}</code></pre>
+						</div>
+					`;
+				}
 				detailHtml = `
 					<div class="approval-header">
 						<ui-icon>edit</ui-icon>
 						<span>Approve File Edit</span>
 					</div>
-					<div class="approval-path">File: <code>${toolCall.arguments.path}</code></div>
+					<div class="approval-path">File: <code>${args.path}</code></div>
 					<div class="approval-diff-preview">
-						<div class="diff-section remove">
-							<span class="diff-label">Remove:</span>
-							<pre><code>${this._escapeHtml(toolCall.arguments.search)}</code></pre>
-						</div>
-						<div class="diff-section add">
-							<span class="diff-label">Add:</span>
-							<pre><code>${this._escapeHtml(toolCall.arguments.replace)}</code></pre>
-						</div>
+						${diffSections}
 					</div>
 				`;
 			} else if (toolCall.name === "create_file") {

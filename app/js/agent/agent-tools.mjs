@@ -1364,11 +1364,10 @@ Snippet: ${r.content || r.snippet || ""}`;
                 lastEndCol = applied.endColIndex;
             }
 
-            const proposedContent = currentContent;
-            const startLineIndex = firstStartLine;
-            const startColIndex = firstStartCol;
-            const endLineIndex = lastEndLine;
-            const endColIndex = lastEndCol;
+            let proposedContent = currentContent;
+            if (originalContent.includes("\r\n") && !proposedContent.includes("\r\n")) {
+                proposedContent = proposedContent.replace(/\n/g, "\r\n");
+            }
 
             // Pre-Save Syntax Validation
             const syntaxCheck = await syntaxValidator.validate(resolvedPath, proposedContent);
@@ -1424,10 +1423,17 @@ Snippet: ${r.content || r.snippet || ""}`;
                 }
             }
 
-            // 2. Perform the edit on Ace session using the aligned range
-            const Range = window.ace.require("ace/range").Range;
-            const rangeToReplace = new Range(startLineIndex, startColIndex, endLineIndex, endColIndex);
-            session.replace(rangeToReplace, replacementString ?? "");
+            // 2. Perform the edit on Ace session by updating the full document with proposedContent
+            const doc = session.getDocument();
+            const lastRow = doc.getLength() - 1;
+            const lastCol = doc.getLine(lastRow).length;
+            const Range = (window.ace.require ? window.ace.require("ace/range").Range : null) || window.ace.Range;
+            const fullRange = new Range(0, 0, lastRow, lastCol);
+            session.replace(fullRange, proposedContent);
+
+            if (firstStartLine >= 0 && targetTab.config.editor?.gotoLine) {
+                targetTab.config.editor.gotoLine(firstStartLine + 1, firstStartCol);
+            }
 
             if (isForgivenessMode) {
                 // 3. Save to disk immediately only if syntax is valid; otherwise defer save to memory
@@ -1457,10 +1463,11 @@ Snippet: ${r.content || r.snippet || ""}`;
 
             if (syntaxCheck.valid) {
                 delete this.fileFailureCounts[resolvedPath];
+                const editCountMsg = editList.length > 1 ? ` (${editList.length} edits applied)` : "";
                 if (isForgivenessMode) {
-                    return `Successfully edited ${path}.`;
+                    return `Successfully edited ${path}${editCountMsg}.`;
                 } else {
-                    return `Successfully edited ${path} in memory (Permission Mode). The tab has switched to the side-by-side Diff view for your review. Click 'Apply Changes' at the top to save to disk or 'Discard' / rollback anytime.`;
+                    return `Successfully edited ${path}${editCountMsg} in memory (Permission Mode). The tab has switched to the side-by-side Diff view for your review. Click 'Apply Changes' at the top to save to disk or 'Discard' / rollback anytime.`;
                 }
             } else {
                 this.fileFailureCounts[resolvedPath] = (this.fileFailureCounts[resolvedPath] || 0) + 1;
