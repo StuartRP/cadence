@@ -2835,19 +2835,36 @@ Snippet: ${r.content || r.snippet || ""}`;
                     throw new Error("No active session found to update scratchpad.");
                 }
 
-                const content = (args.content !== undefined ? args.content : (args.notes || "")).toString();
-                const byteSize = new TextEncoder().encode(content).length;
+                const mode = (args.mode || "replace").toLowerCase();
+                const newContent = (args.content !== undefined ? args.content : (args.notes || "")).toString();
+
+                let finalContent = "";
+                if (mode === "append") {
+                    const currentContent = (session.scratchpad || "").trim();
+                    if (currentContent && newContent.trim()) {
+                        finalContent = `${currentContent}\n\n${newContent.trim()}`;
+                    } else if (newContent.trim()) {
+                        finalContent = newContent.trim();
+                    } else {
+                        finalContent = currentContent;
+                    }
+                } else {
+                    finalContent = newContent.trim();
+                }
+
+                const byteSize = new TextEncoder().encode(finalContent).length;
                 if (byteSize > 4096) {
                     return `Error: Scratchpad content exceeds 4KB limit (${byteSize} bytes / 4096 bytes max). Please keep your notes concise.`;
                 }
 
-                session.scratchpad = content.trim();
+                session.scratchpad = finalContent;
                 delete session.scratchpadTokenCount;
                 session.lastModified = Date.now();
                 await workspaceClient.setSession(session.id, session);
                 aiManager?._updateAgentProgressPanel?.();
 
-                return `Scratchpad updated (${byteSize} bytes). Notes are active and evergreen in context.`;
+                const actionVerb = mode === "append" ? "appended to" : "updated";
+                return `Scratchpad ${actionVerb} (${byteSize} bytes). Notes are active and evergreen in context.`;
             }
             case 'scratchpad_clear': {
                 const targetSessionId = sourceId || window.ui?.aiManager?.activeSessionId;

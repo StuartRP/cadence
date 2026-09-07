@@ -901,6 +901,9 @@ export class Agent {
 							suffix += ` (raw)`;
 						}
 						responseTitle = `[Tool Response: web_fetch ${url}${suffix}]`;
+					} else if (toolCall.name === "scratchpad_write" && toolCall.arguments) {
+						const mode = (toolCall.arguments.mode || "replace").toLowerCase();
+						responseTitle = `[Tool Response: scratchpad_write (${mode})]`;
 					}
 					accumulatedResponses.push(`${responseTitle}\n\n${toolResult}`);
 

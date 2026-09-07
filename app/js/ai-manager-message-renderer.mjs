@@ -686,9 +686,13 @@ export default class AIManagerMessageRenderer {
                     label = `<code>${toolName}:</code> <span class="tool-call-query"><code>$ ${this._escapeHtml(truncatedCmd)}</code></span>${cwdInfo}`;
                 } else if (args.query) {
                     label = `<code>${toolName}:</code> <span class="tool-call-query">"${this._escapeHtml(args.query)}"</span>`;
-                } else if (args.question) {
-                    const truncated = args.question.length > 60 ? args.question.substring(0, 60) + "..." : args.question;
-                    label = `<code>${toolName}:</code> <span class="tool-call-query">"${this._escapeHtml(truncated)}"</span>`;
+                } else if (toolName === "scratchpad_write") {
+                    const mode = (args.mode || "replace").toLowerCase();
+                    const contentStr = (args.content || args.notes || "").trim();
+                    const snippet = contentStr.length > 40 ? contentStr.substring(0, 40) + "..." : contentStr;
+                    label = `<code>${toolName} (${mode}):</code> <span class="tool-call-query">"${this._escapeHtml(snippet)}"</span>`;
+                } else if (toolName === "scratchpad_clear") {
+                    label = `<code>${toolName}</code>`;
                 }
 
                 let expanderHtml = "";
@@ -911,8 +915,13 @@ export default class AIManagerMessageRenderer {
             const cwdVal = args.cwd || args.dir;
             const cwdInfo = cwdVal ? ` <span class="tool-call-cwd" style="opacity:0.8; font-size:0.9em;">(in <code>${this._escapeHtml(cwdVal.split('/').filter(Boolean).pop() || cwdVal)}</code>)</span>` : '';
             label = `<code>${toolName}:</code> <span class="tool-call-query"><code>$ ${this._escapeHtml(truncatedCmd)}</code></span>${cwdInfo}`;
-        } else if (args.query) {
-            label = `<code>${toolName}:</code> <span class="tool-call-query">"${this._escapeHtml(args.query)}"</span>`;
+        } else if (toolName === "scratchpad_write") {
+            const mode = (args.mode || "replace").toLowerCase();
+            const contentStr = (args.content || args.notes || "").trim();
+            const snippet = contentStr.length > 40 ? contentStr.substring(0, 40) + "..." : contentStr;
+            label = `<code>${toolName} (${mode}):</code> <span class="tool-call-query">"${this._escapeHtml(snippet)}"</span>`;
+        } else if (toolName === "scratchpad_clear") {
+            label = `<code>${toolName}</code>`;
         } else if (args.question) {
             const truncated = args.question.length > 60 ? args.question.substring(0, 60) + "..." : args.question;
             label = `<code>${toolName}:</code> <span class="tool-call-query">"${this._escapeHtml(truncated)}"</span>`;
@@ -1118,7 +1127,13 @@ export default class AIManagerMessageRenderer {
                     const contentBytes = (new TextEncoder().encode(args.content || "")).length;
                     details += ` (+${contentLines}, ${this.formatByteSize(contentBytes, true)})`;
                 }
-                return details;
+            } else if (toolName === "scratchpad_write") {
+                const mode = (args.mode || "replace").toLowerCase();
+                const contentStr = (args.content || args.notes || "").trim();
+                const snippet = contentStr.length > 25 ? contentStr.substring(0, 25) + "..." : contentStr;
+                return `(${mode}) "${this._escapeHtml(snippet)}"`;
+            } else if (toolName === "scratchpad_clear") {
+                return "";
             } else if (args.query) {
                 const shortQuery = args.query.length > 25 ? args.query.substring(0, 25) + "..." : args.query;
                 return `"${this._escapeHtml(shortQuery)}"`;

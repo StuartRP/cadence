@@ -227,13 +227,18 @@ export const tools = [
 	{
 		name: "scratchpad_write",
 		description:
-			"Write or update concise notes in the session scratchpad. Kept evergreen in context across turns to retain important discoveries (max 4KB, Markdown format recommended).",
+			"Write or update concise notes in the session scratchpad. Kept evergreen in context across turns to retain important discoveries (max 4KB, Markdown format recommended). Use `mode: 'append'` to add new notes to existing scratchpad content.",
 		parameters: {
 			type: "object",
 			properties: {
 				content: {
 					type: "string",
-					description: "Markdown notes or discoveries to keep in the scratchpad (max 4096 bytes).",
+					description: "Markdown notes or discoveries to keep in the scratchpad (max 4096 bytes total).",
+				},
+				mode: {
+					type: "string",
+					enum: ["replace", "append"],
+					description: "Whether to 'replace' (default) the entire scratchpad or 'append' new content to current notes.",
 				},
 			},
 			required: ["content"],
