@@ -12,6 +12,7 @@ export class Agent {
 		this._abortAgent = false;
 		this.throttleBar = null;
 		this.haltBar = null;
+		this._throttleResolve = null;
 		this.consecutiveHaltCount = 0;
 		this.repetitionHaltCount = 0;
 		this.protocolFlagRepeatCount = 0;
@@ -21,6 +22,14 @@ export class Agent {
 
 	stop(reason = "User requested stop") {
 		this._abortAgent = true;
+		if (this.throttleBar) {
+			this.throttleBar.remove();
+			this.throttleBar = null;
+		}
+		if (this._throttleResolve) {
+			this._throttleResolve();
+			this._throttleResolve = null;
+		}
 		if (this.connection) {
 			this.connection.stop(reason);
 		}
@@ -35,7 +44,6 @@ export class Agent {
 
 	async run(userMessage, userMessageElement) {
 		let loopCount = 0;
-		const maxLoops = 15;
 		this._abortAgent = false;
 		let isThrottled = true;
 		const { aiManager, session, connection } = this;
@@ -52,6 +60,9 @@ export class Agent {
 		const connConfig = connection?.config || {};
 		const hasRateLimits = !!(connConfig.rpmLimit || connConfig.rpdLimit || connConfig.tpmLimit || connConfig.requestsPerMin || connection?.requestsPerMin);
 		const maxTurns = connConfig.maxTurns !== undefined ? connConfig.maxTurns : (connection?.config?.maxTurns || 0);
+		// Calculate soft throttle iteration threshold as 1/3 of maxTurns (0 for unlimited turns)
+		const maxIterations = maxTurns > 0 ? Math.max(1, Math.round(maxTurns / 3)) : 0;
+		let nextThrottleThreshold = maxIterations > 0 ? maxIterations : Infinity;
 
 		while (aiManager.runningSessions.has(session.id)) {
 			if (this._abortAgent) break;
@@ -82,6 +93,8 @@ export class Agent {
 						haltBar.remove();
 						this.haltBar = null;
 						loopCount = 1; // Reset counter for the next batch
+						nextThrottleThreshold = maxIterations > 0 ? maxIterations : Infinity;
+						isThrottled = true;
 						aiManager.setSessionProcessing(session.id, true, 'agent', null);
 						aiManager._updateTabStatus(session.id, "active");
 						resolve();
@@ -100,10 +113,11 @@ export class Agent {
 				if (this._abortAgent || !aiManager.runningSessions.has(session.id)) break;
 			}
 
-			// Apply throttle only if the connection specifies rate limits (RPM, RPD, TPM)
-			if (hasRateLimits && loopCount > maxLoops) {
+			// Apply throttle threshold if max_iterations is set (> 0)
+			if (maxIterations > 0 && loopCount >= nextThrottleThreshold) {
 				if (!this.throttleBar) {
-					this.throttleBar = document.createElement("div");
+					isThrottled = true;
+					this.throttleBar = new Block();
 					this.throttleBar.className = "agent-throttle-bar";
 					this.throttleBar.innerHTML = `
 						<ui-icon style="vertical-align: middle; margin-right: 4px; font-size: 16px;">speed</ui-icon>
@@ -113,19 +127,30 @@ export class Agent {
 					const btn = this.throttleBar.querySelector('.throttle-toggle');
 					btn.onclick = () => {
 						isThrottled = false;
+						nextThrottleThreshold = loopCount + maxIterations;
 						if (this.throttleBar) {
 							this.throttleBar.remove();
 							this.throttleBar = null;
+						}
+						if (this._throttleResolve) {
+							this._throttleResolve();
+							this._throttleResolve = null;
 						}
 					};
 					aiManager.chatContainer.append(this.throttleBar);
 				}
 				if (this.throttleBar) {
-					this.throttleBar.querySelector('.throttle-text').innerText = `Agent execution throttled due to long running task: ${loopCount} of ${maxLoops} iterations`;
+					this.throttleBar.querySelector('.throttle-text').innerText = `Agent execution throttled due to long running task: ${loopCount} of ${maxTurns} turns`;
 				}
 
 				if (isThrottled) {
-					await new Promise(r => setTimeout(r, 7000));
+					await new Promise(r => {
+						this._throttleResolve = r;
+						setTimeout(() => {
+							this._throttleResolve = null;
+							r();
+						}, 7000);
+					});
 				}
 			}
 
@@ -796,9 +821,15 @@ export class Agent {
 							}
 							if (toolCall.name === "query") {
 								loopCount = 0;
+								nextThrottleThreshold = maxIterations > 0 ? maxIterations : Infinity;
+								isThrottled = true;
 								if (this.throttleBar) {
 									this.throttleBar.remove();
 									this.throttleBar = null;
+								}
+								if (this._throttleResolve) {
+									this._throttleResolve();
+									this._throttleResolve = null;
 								}
 							}
 						} catch (e) {
@@ -1139,6 +1170,10 @@ export class Agent {
 		if (this.throttleBar) {
 			this.throttleBar.remove();
 			this.throttleBar = null;
+		}
+		if (this._throttleResolve) {
+			this._throttleResolve();
+			this._throttleResolve = null;
 		}
 	}
 
