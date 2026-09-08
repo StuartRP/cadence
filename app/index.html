@@ -217,6 +217,8 @@
 		<ui-menu-item command="refresh" icon="refresh">Refresh Folder</ui-menu-item>
 		<ui-menu-item command="remove" icon="remove">Remove Folder</ui-menu-item>
 		<ui-menu-split></ui-menu-split>
+		<ui-menu-item command="terminal" icon="terminal">Open Terminal Here</ui-menu-item>
+		<ui-menu-split></ui-menu-split>
 		<ui-menu-item command="info" icon="info">Folder Info</ui-menu-item>
 	</ui-menu>
 
@@ -227,6 +229,8 @@
 		<!--<ui-menu-split></ui-menu-split>-->
 		<!--<ui-menu-item command="delete" icon="delete">Delete Folder</ui-menu-item>-->
 		<ui-menu-split></ui-menu-split>
+		<ui-menu-item command="terminal" icon="terminal">Open Terminal Here</ui-menu-item>
+		<ui-menu-split></ui-menu-split>
 		<ui-menu-item command="info" icon="info">Folder Info</ui-menu-item>
 	</ui-menu>
 	
@@ -235,12 +239,16 @@
 		<ui-menu-split></ui-menu-split>
 		<ui-menu-item command="delete" icon="delete">Delete File</ui-menu-item>
 		<ui-menu-split></ui-menu-split>
+		<ui-menu-item command="terminal" icon="terminal">Open Terminal Here</ui-menu-item>
+		<ui-menu-split></ui-menu-split>
 		<ui-menu-item command="info" icon="info">File Info</ui-menu-item>
 	</ui-menu>
 
 	<ui-menu id="ai_tab_context" onclick="(e)=>console.log(e)">
-		<ui-menu-item command="rename" icon="edit">Rename Chat</ui-menu-item>
-		<ui-menu-item command="copy" icon="content_copy">Duplicate Chat</ui-menu-item>
+		<ui-menu-item command="rename" icon="edit">Rename</ui-menu-item>
+		<ui-menu-item command="copy" icon="content_copy">Fork</ui-menu-item>
+		<ui-menu-split></ui-menu-split>
+		<ui-menu-item command="terminal" icon="terminal">Open Terminal Here</ui-menu-item>
 		<ui-menu-split></ui-menu-split>
 		<ui-menu-item command="archive" icon="history">Archive</ui-menu-item>
 		<ui-menu-item command="delete" icon="delete">Delete</ui-menu-item>

@@ -662,7 +662,13 @@ export class Agent {
 					}
 
 					if (responseContent.replace(regex, "").length > 50) {
+						session.lastModified = Date.now();
+						await workspaceClient.setSession(session.id, session);
+						aiManager._updateTabStatus(session.id, "completed");
 						aiManager.setSessionProcessing(session.id, false);
+						if (aiManager.isSessionViewed(session.id)) {
+							aiManager._dispatchContextUpdate("append_model");
+						}
 						return;
 					}
 

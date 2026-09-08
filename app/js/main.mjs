@@ -2123,9 +2123,16 @@ const fileMenu = document.getElementById("file_context")
 const folderMenu = document.getElementById("folder_context")
 const topfolderMenu = document.getElementById("top_folder_context")
 
+// The item the context menu is currently shown for. Stored at module scope
+// (not on `fileList._contextElement`) because FileList._render resets that to
+// null on every re-render, which would wipe a tab's context before the user
+// clicks a menu item. Set in handleFileContextMenu for both the editor-tab and
+// filelist paths; read by the shared click handler below.
+let _contextItem = null
+
 fileMenu.click = folderMenu.click = topfolderMenu.click = async (action) => {
-	const active = fileList.contextElement
-	const file = active.item
+	const file = _contextItem
+	if (!file) return
 	const filePath = file.path || file.name;
 
 	switch (action) {
@@ -2167,6 +2174,26 @@ fileMenu.click = folderMenu.click = topfolderMenu.click = async (action) => {
 				Modal.notice(htmlContent, `${file.name} Information`);
 			} catch (e) {
 				Modal.notice(`Failed to get file info: ${e.message}`, "Error");
+			}
+			break;
+		case "terminal":
+			{
+				// Open a terminal in the target directory. For editor tabs the
+				// directory is pre-resolved (terminalDir). For filelist items we
+				// derive it from `item.path`, which is relative to the backend root
+				// (e.g. "repo/dev.jakbox.cadence/src/main.mjs") — the same base the
+				// backend resolves `dir` against (filepath.Abs). A folder opens in
+				// itself; a file opens in its parent directory.
+				let dir = file.terminalDir
+				if (!dir) {
+					const absolutePath = file.fullPath || file.path || filePath
+					dir = file.isDir ? absolutePath : absolutePath.substring(0, absolutePath.lastIndexOf('/'))
+				}
+				const tm = window.terminalManager
+				if (!tm) break
+				if (ui.toggleDrawer) ui.toggleDrawer(true)
+				tm._pendingDir = dir
+				tm.createNewTerminalSession()
 			}
 			break;
 		case "remove":
@@ -2260,11 +2287,67 @@ fileMenu.click = folderMenu.click = topfolderMenu.click = async (action) => {
 	}
 }
 
-fileList.context = (e) => {
+// Resolve the directory a terminal should open in for a given editor tab.
+// Folder tabs open in the folder itself; file tabs open in the file's parent
+// directory. Falls back to the workspace's first root folder.
+const resolveTabDir = (tab) => {
+	const config = tab?.config
+	if (!config) return ""
+	const rawPath = config.handle?.path || config.fileItem?.path || config.path || (typeof config.folder === "string" ? config.folder : null)
+	if (!rawPath || typeof rawPath !== "string") return ""
+	const normalized = rawPath.replace(/\\/g, "/")
+	if (config.isDir || config.handle?.isDir) return normalized
+	const parts = normalized.split("/")
+	parts.pop()
+	return parts.join("/")
+}
+
+// Determine whether an editor tab represents a real file or folder (as opposed
+// to a settings / plan-tasks / diff / scratch tab).
+const isFileTab = (tab) => {
+	const config = tab?.config
+	if (!config) return false
+	if (config.isDir) return true
+	const path = config.path
+	return typeof path === "string" && (path.includes("/") || /\.[a-z0-9]{1,8}$/i.test(path))
+}
+
+const handleFileContextMenu = (e) => {
 	let menu = folderMenu
+
+	// Editor file/folder tabs reuse the filelist context menus. The TabBar sets
+	// `e.tab` on the context event; we build a synthetic item so the shared
+	// click handler (which reads the module-scope `_contextItem`) works for both.
+	if (e.tab && e.tab.config) {
+		const tab = e.tab
+		if (!isFileTab(tab)) return // settings / plan / diff / scratch tabs: no menu
+		const isDir = !!(tab.config.isDir || tab.config.handle?.isDir)
+		// `path` is the tab's OWN path (file or folder) so info/rename/delete
+		// target the right node. `terminalDir` is the directory a terminal should
+		// open in: a folder opens in itself, a file opens in its parent dir.
+		const ownPath = tab.config.path
+		const dir = resolveTabDir(tab)
+		const item = {
+			name: tab.config.name,
+			path: ownPath,
+			isDir,
+			terminalDir: dir,
+		}
+		_contextItem = item
+		// Only a folder can be a top-level workspace root; a file never is.
+		if (isDir && workspace.folders.includes(ownPath)) {
+			menu = topfolderMenu
+		} else if (isDir) {
+			menu = folderMenu
+		} else {
+			menu = fileMenu
+		}
+		return menu.showAt(e)
+	}
 
 	const fileItem = e.srcElement.closest("ui-file-item")
 	if (!fileItem) return
+	_contextItem = fileItem.item
 	if (workspace.folders.includes(fileItem.item.path || fileItem.item)) {
 		menu = topfolderMenu
 	} else {
@@ -2276,6 +2359,14 @@ fileList.context = (e) => {
 	}
 	menu.showAt(e)
 }
+
+fileList.context = handleFileContextMenu
+
+// Cross-bind the editor file/folder tabs to the same filelist context menus.
+// The TabBar sets `e.tab` on the context event; the unified handler above
+// builds a synthetic item and picks the right menu. Settings / plan / diff /
+// scratch tabs are filtered out (no menu shown).
+leftTabs.context = rightTabs.context = handleFileContextMenu
 
 fileList.expand = (item) => {
 	for (const tab of leftTabs.tabs) {
@@ -3666,9 +3757,18 @@ setTimeout(async () => {
 			"session_messages_loaded",
 			"session_deleted",
 			"session_closed",
-			"session_renamed"
+			"session_renamed",
+			"settings_change_external",
+			"settings_change",
+			"settings_save_error",
+			"settings_save_success",
+			"file_mode_changed",
+			"ai_connection_switched",
+			"summarize_error",
+			"edit_prompt"
 		];
-		const shouldSkipSave = isSync || nonSavingTypes.includes(type);
+		const isRunningExternally = ui.aiManager?.sessionsManager?.externalRunningSessions?.has(activeSessionData?.id);
+		const shouldSkipSave = isSync || isRunningExternally || nonSavingTypes.includes(type);
 		if (activeSessionData && activeSessionData.id && !shouldSkipSave) {
 			clearTimeout(ui.aiManager.saveActiveSessionTimeout);
 			ui.aiManager.saveActiveSessionTimeout = setTimeout(async () => {

@@ -418,7 +418,7 @@ export class TabBar extends Block {
 		}
 
 		tab.onpointerdown = (event) => {
-    		if (event.which == 2) {
+    		if (event.which == 2 || event.which == 3) {
 				event.stopPropagation()
 				event.preventDefault()
 			    return

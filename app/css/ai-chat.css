@@ -1672,7 +1672,8 @@
 }
 
 .condensed-view-button.active,
-.raw-view-button.active {
+.raw-view-button.active,
+.glow-animation-button.active {
     background-color: var(--theme-dark, #005f9e) !important;
     color: var(--text-inverted, #ffffff) !important;
 }

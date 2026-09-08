@@ -18,6 +18,7 @@ class AIManagerSessions {
 		// Cross-tab synchronization via BroadcastChannel
 		this.instanceId = crypto.randomUUID();
 		this._isSyncingFromBroadcast = false;
+		this.externalRunningSessions = new Map(); // sessionId -> { type, timestamp }
 		this.broadcastChannel = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('cadence_ai_sessions') : null;
 		if (this.broadcastChannel) {
 			this.broadcastChannel.onmessage = (e) => this._handleBroadcast(e.data);
@@ -38,6 +39,50 @@ class AIManagerSessions {
 		if (!msg || !msg.action || msg.senderId === this.instanceId) return;
 
 		switch (msg.action) {
+			case 'session_processing_start':
+				if (msg.sessionId) {
+					this.externalRunningSessions.set(msg.sessionId, { type: msg.type, timestamp: msg.timestamp });
+					this.manager._updateTabStatus(msg.sessionId, "running");
+					if (this.activeSessionId === msg.sessionId) {
+						this.manager._setButtonsDisabledState(true);
+					}
+				}
+				break;
+
+			case 'session_processing_stop':
+				if (msg.sessionId) {
+					this.externalRunningSessions.delete(msg.sessionId);
+					this.manager._updateTabStatus(msg.sessionId, "completed");
+					if (this.activeSessionId === msg.sessionId) {
+						this.manager._setButtonsDisabledState(false);
+					}
+				}
+				break;
+
+			case 'query_running_sessions':
+				if (this.manager.runningSessions.size > 0) {
+					const runningList = Array.from(this.manager.runningSessions.keys()).map(id => ({
+						sessionId: id,
+						type: this.manager.runningSessions.get(id)?.type
+					}));
+					this._broadcast('running_sessions_response', { running: runningList });
+				}
+				break;
+
+			case 'running_sessions_response':
+				if (Array.isArray(msg.running)) {
+					for (const item of msg.running) {
+						if (item && item.sessionId) {
+							this.externalRunningSessions.set(item.sessionId, { type: item.type, timestamp: msg.timestamp });
+							this.manager._updateTabStatus(item.sessionId, "running");
+							if (this.activeSessionId === item.sessionId) {
+								this.manager._setButtonsDisabledState(true);
+							}
+						}
+					}
+				}
+				break;
+
 			case 'session_updated':
 				if (msg.sessionId) {
 					const meta = this.allSessionMetadata.find(s => s.id === msg.sessionId);
@@ -46,7 +91,8 @@ class AIManagerSessions {
 						if (msg.name) meta.name = msg.name;
 					}
 					// If this session is currently active and this tab is not actively processing, reload so it stays in sync
-					if (this.activeSessionId === msg.sessionId && !this.manager._isProcessing) {
+					const isRunningLocally = this.manager.runningSessions.has(msg.sessionId);
+					if (this.activeSessionId === msg.sessionId && !this.manager._isProcessing && !isRunningLocally) {
 						// Don't re-fetch if our in-memory session is already as new or newer than the broadcasted state
 						if (this.activeSession && msg.lastModified && this.activeSession.lastModified && this.activeSession.lastModified >= msg.lastModified) {
 							return;
@@ -58,8 +104,17 @@ class AIManagerSessions {
 							this._isSyncingFromBroadcast = true;
 							const updatedSession = await workspaceClient.getSession(msg.sessionId);
 							if (updatedSession) {
-								if (this.activeSession && updatedSession.lastModified && this.activeSession.lastModified > updatedSession.lastModified) {
+								if (this.activeSession && updatedSession.lastModified && this.activeSession.lastModified >= updatedSession.lastModified) {
 									return;
+								}
+								// Guard against truncating local conversation:
+								// Never replace a longer conversation with a shorter one unless explicitly deleted
+								const isExplicitDeletion = msg.type === "delete_item" || msg.type === "clear_active_session" || msg.type === "undo_delete";
+								if (!isExplicitDeletion && this.activeSession?.messages && updatedSession?.messages) {
+									if (this.activeSession.messages.length > updatedSession.messages.length) {
+										console.warn(`[AIManagerSessions] Ignoring cross-tab sync: local session has ${this.activeSession.messages.length} messages, fetched session has ${updatedSession.messages.length}. Preventing truncation.`);
+										return;
+									}
 								}
 								const { session: migratedSession } = SessionMigrator.migrate(updatedSession);
 								this.activeSession = migratedSession;
@@ -143,6 +198,9 @@ class AIManagerSessions {
 			// If no sessions exist at all, create one.
 			await this.createNewSession();
 		}
+
+		// Query other windows/tabs for any sessions currently processing
+		this._broadcast('query_running_sessions');
 	}
 
 	/**
@@ -354,8 +412,8 @@ class AIManagerSessions {
 			this.manager.haltBar = null;
 		}
 
-		// Save the state of the *current* active session (if any)
-		if (this.activeSession && this.activeSession.id) {
+		// Save the state of the *current* active session (if any, and not currently running externally)
+		if (this.activeSession && this.activeSession.id && !this.externalRunningSessions.has(this.activeSession.id)) {
 			this.activeSession.promptInput = this.manager.promptEditor.getValue();
 			this.activeSession.scrollTop = this.manager.conversationArea.scrollTop; // Save current scroll position
 			this.activeSession.agentMode = this.manager.agentMode;
@@ -393,7 +451,7 @@ class AIManagerSessions {
 		// JIT Migration: Upgrade legacy sessions to latest structured JSON schema
 		const { session: migratedSession, modified } = SessionMigrator.migrate(newSessionData);
 		newSessionData = migratedSession;
-		if (modified) {
+		if (modified && !this.externalRunningSessions.has(sessionId)) {
 			workspaceClient.setSession(sessionId, newSessionData).catch(err => {
 				console.warn("[AIManagerSessions] Failed to persist migrated session:", err);
 			});
@@ -503,7 +561,7 @@ class AIManagerSessions {
 				}
 			}
 
-			if (modified) {
+			if (modified && !this.externalRunningSessions.has(session.id)) {
 				session.lastModified = Date.now();
 				await workspaceClient.setSession(session.id, session);
 			}

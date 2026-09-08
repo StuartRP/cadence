@@ -16,6 +16,10 @@
     opacity: 1;
 }
 
+.undulating-glow-container.glow-disabled {
+    display: none !important;
+}
+
 .undulating-glow-canvas {
     position: absolute;
     bottom: -20px;

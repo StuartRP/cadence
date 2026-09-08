@@ -91,11 +91,14 @@ class AIManager {
 			defaultAutoMilestones: localStorage.getItem("defaultAutoMilestones") !== "false",
 			defaultAutoRollbackOnFailures: localStorage.getItem("defaultAutoRollbackOnFailures") === "true",
 			defaultAutoRollbackThreshold: parseInt(localStorage.getItem("defaultAutoRollbackThreshold") || "3", 10),
+			enableGlowAnimation: localStorage.getItem("aiEnableGlowAnimation") !== "false",
 		};
 		// NEW: Session TabBar properties
 		this.sessionTabBar = null;
 		this.newSessionButton = null;
 		this.settingsButton = null; // NEW: Reference for settings button
+		this.glowAnimationButton = null;
+		this.glowAnimationEnabled = this.config.enableGlowAnimation;
 
 		this.saveWorkspaceTimeout = null; // For debouncing workspace saves from _dispatchContextUpdate
 		this.agentMode = false; // NEW: Toggle between standard chat and agentic tool loop
@@ -510,6 +513,8 @@ class AIManager {
 					this.sessionsManager.renameCurrentSession();
 				} else if (action === "copy") {
 					this.sessionsManager.copySession(sessionId);
+				} else if (action === "terminal") {
+					this._openTerminalForSession(sessionId);
 				} else if (action === "archive") {
 					this.sessionsManager.closeSessionTab(sessionId, tab);
 				} else if (action === "delete") {
@@ -548,6 +553,13 @@ class AIManager {
 		this.condensedViewButton.title = "Toggle Condensed / Detailed View (Shows current & previous turn only)";
 		this.condensedViewButton.classList.add("condensed-view-button");
 		this.condensedViewButton.onclick = () => this.toggleCondensedView();
+
+		this.glowAnimationButton = new Button("");
+		this.glowAnimationButton.icon = this.glowAnimationEnabled ? "blur_on" : "blur_off";
+		this.glowAnimationButton.title = this.glowAnimationEnabled ? "Disable Glowing Blob Animation" : "Enable Glowing Blob Animation";
+		this.glowAnimationButton.classList.add("glow-animation-button");
+		this.glowAnimationButton.classList.toggle("active", this.glowAnimationEnabled);
+		this.glowAnimationButton.onclick = () => this.toggleGlowAnimation();
 
 		this.sessionTabBar.append(this.historyButton, this.newSessionButton)
 
@@ -958,6 +970,9 @@ class AIManager {
 	_createUndulatingGlow() {
 		const container = document.createElement('div');
 		container.classList.add('undulating-glow-container');
+		if (!this.glowAnimationEnabled) {
+			container.classList.add('glow-disabled');
+		}
 
 		const canvas = document.createElement('div');
 		canvas.classList.add('undulating-glow-canvas');
@@ -978,6 +993,8 @@ class AIManager {
 		if (targetId) {
 			this.glowingSessions.add(targetId);
 		}
+
+		if (!this.glowAnimationEnabled) return;
 
 		if (this.isSessionViewed(targetId)) {
 			if (this.undulatingGlow) {
@@ -1012,7 +1029,7 @@ class AIManager {
 
 	_updateGlowForViewedSession() {
 		const viewedSessionId = this.activeSession?.activeSubAgentSessionId || this.activeSessionId;
-		if (viewedSessionId && this.glowingSessions.has(viewedSessionId)) {
+		if (this.glowAnimationEnabled && viewedSessionId && this.glowingSessions.has(viewedSessionId)) {
 			if (this.undulatingGlow) {
 				this.undulatingGlow.classList.add('active');
 			}
@@ -1097,6 +1114,7 @@ class AIManager {
 		buttonContainer.append(this.thinkingBudgetSelect);
 		buttonContainer.append(this.condensedViewButton); // Add condensed vs detailed toggle
 		buttonContainer.append(this.rawViewButton); // Add raw view button
+		buttonContainer.append(this.glowAnimationButton); // Add glow animation toggle
 		buttonContainer.append(this.settingsButton);
 		this.stopButton = new Button("Stop");
 		this.stopButton.setIcon("stop");
@@ -1376,7 +1394,9 @@ class AIManager {
 	}
 
 	get _isProcessing() {
-		return this.activeSessionId ? this.runningSessions.has(this.activeSessionId) : false;
+		return this.activeSessionId
+			? (this.runningSessions.has(this.activeSessionId) || !!this.sessionsManager?.externalRunningSessions?.has(this.activeSessionId))
+			: false;
 	}
 
 	set _isProcessing(value) {
@@ -1392,9 +1412,11 @@ class AIManager {
 				this.runningSessions.set(sessionId, { type, controller, session: session || (this.activeSessionId === sessionId ? this.activeSession : null) });
 			}
 			this._updateTabStatus(sessionId, "running");
+			this.sessionsManager?._broadcast('session_processing_start', { sessionId, type });
 		} else {
 			this.runningSessions.delete(sessionId);
 			this._updateTabStatus(sessionId, "completed");
+			this.sessionsManager?._broadcast('session_processing_stop', { sessionId });
 		}
 		this._setButtonsDisabledState(this._isProcessing);
 	}
@@ -1976,6 +1998,41 @@ class AIManager {
 		this.historyManager.render();
 	}
 
+	setGlowAnimationEnabled(enabled, showToast = false) {
+		this.glowAnimationEnabled = !!enabled;
+		this.config.enableGlowAnimation = this.glowAnimationEnabled;
+		localStorage.setItem("aiEnableGlowAnimation", this.glowAnimationEnabled ? "true" : "false");
+
+		if (this.glowAnimationButton) {
+			this.glowAnimationButton.icon = this.glowAnimationEnabled ? "blur_on" : "blur_off";
+			this.glowAnimationButton.title = this.glowAnimationEnabled ? "Disable Glowing Blob Animation" : "Enable Glowing Blob Animation";
+			this.glowAnimationButton.classList.toggle("active", this.glowAnimationEnabled);
+		}
+
+		if (this.undulatingGlow) {
+			this.undulatingGlow.classList.toggle('glow-disabled', !this.glowAnimationEnabled);
+		}
+
+		if (this.glowAnimationEnabled) {
+			this._updateGlowForViewedSession();
+		} else {
+			if (this.undulatingGlow) {
+				this.undulatingGlow.classList.remove('active');
+			}
+			if (this.conversationArea) {
+				this.conversationArea.classList.remove('glow-active');
+			}
+		}
+
+		if (showToast && window.modal?.toast) {
+			window.modal.toast(this.glowAnimationEnabled ? "Glowing blob animation enabled" : "Glowing blob animation disabled");
+		}
+	}
+
+	toggleGlowAnimation() {
+		this.setGlowAnimationEnabled(!this.glowAnimationEnabled, true);
+	}
+
 	// --- Session Management Delegation ---
 	get allSessionMetadata() { return this.sessionsManager.allSessionMetadata; }
 	set allSessionMetadata(val) { this.sessionsManager.allSessionMetadata = val; }
@@ -2009,6 +2066,38 @@ class AIManager {
 
 	async switchSession(sessionId) {
 		return this.sessionsManager.switchSession(sessionId);
+	}
+
+	/**
+	 * Opens a new terminal at the root of the given AI session.
+	 * Uses the session's first pinned root if it has any, otherwise the
+	 * workspace's default (first) root folder.
+	 * @param {string} sessionId - The AI session ID to open a terminal for.
+	 */
+	async _openTerminalForSession(sessionId) {
+		const session = sessionId === this.sessionsManager.activeSessionId
+			? this.sessionsManager.activeSession
+			: await workspaceClient.getSession(sessionId);
+
+		// Resolve target directory: first pinned root, else default workspace root
+		let dir = "";
+		const pinnedRoot = session?.pinnedRoots?.[0];
+		if (pinnedRoot && typeof pinnedRoot === "string") {
+			dir = pinnedRoot;
+		} else {
+			const rawFolder = window.workspace?.folders?.[0];
+			dir = typeof rawFolder === 'string' ? rawFolder : (rawFolder?.path || rawFolder?.name || "");
+		}
+
+		const tm = window.terminalManager;
+		if (!tm) return;
+
+		// Open the terminal drawer so the new terminal is visible
+		if (window.ui?.toggleDrawer) window.ui.toggleDrawer(true);
+
+		// Request a terminal in this directory (consumed by the next connection)
+		tm._pendingDir = dir;
+		tm.createNewTerminalSession();
 	}
 
 	async deleteSession(sessionId, tab) {
@@ -2052,6 +2141,14 @@ class AIManager {
 
 		const isSync = !!this.sessionsManager?._isSyncingFromBroadcast;
 
+		// Synchronize activeSession.lastModified into allSessionMetadata before dispatching
+		if (this.activeSession && this.allSessionMetadata) {
+			const activeMeta = this.allSessionMetadata.find(s => s.id === this.activeSession.id);
+			if (activeMeta && this.activeSession.lastModified) {
+				activeMeta.lastModified = Math.max(activeMeta.lastModified || 0, this.activeSession.lastModified);
+			}
+		}
+
 		const eventDetail = {
 			aiProvider: this.aiProvider,
 			runMode: "chat", // Always chat mode now
@@ -2087,7 +2184,14 @@ class AIManager {
 			"session_deleted",
 			"session_closed",
 			"session_renamed",
-			"ai_connection_switched"
+			"ai_connection_switched",
+			"settings_change_external",
+			"settings_change",
+			"settings_save_error",
+			"settings_save_success",
+			"file_mode_changed",
+			"summarize_error",
+			"edit_prompt"
 		];
 
 		if (this.sessionsManager?._broadcast && this.activeSession && !nonBroadcastTypes.includes(type)) {
@@ -2095,7 +2199,9 @@ class AIManager {
 				sessionId: this.activeSession.id,
 				lastModified: this.activeSession.lastModified,
 				revision: this.activeSession.revision,
-				name: this.activeSession.name
+				name: this.activeSession.name,
+				type: type,
+				messageCount: this.activeSession.messages ? this.activeSession.messages.length : 0
 			});
 		}
 
