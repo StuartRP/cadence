@@ -348,176 +348,354 @@ class Gemini extends AI {
     }
 
     _toGeminiContents(messages) {
-        const preprocessed = [];
+        // Phase 1: Convert raw messages into initial turns
+        const rawTurns = [];
+
         for (const msg of messages) {
+            if (!msg) continue;
+
             if (msg.type === 'file_context') {
-                preprocessed.push(msg);
+                const fileContent = `--- File: ${msg.filename || msg.id} ---\n\`\`\`${msg.language || ''}\n${msg.content}\n\`\`\``;
+                rawTurns.push({
+                    role: 'user',
+                    parts: [{ text: fileContent }]
+                });
                 continue;
             }
-            
-            const role = msg.role === 'model' ? 'model' : 'user';
-            const last = preprocessed.length > 0 ? preprocessed[preprocessed.length - 1] : null;
-            
-            if (last && last.role === role && last.type !== 'file_context') {
-                last.content = (last.content || '') + '\n\n' + (msg.content || '');
-                if (msg.toolCalls) {
-                    last.toolCalls = (last.toolCalls || []).concat(msg.toolCalls);
+
+            const contentStr = typeof msg.content === 'string' ? msg.content : (msg.content ? JSON.stringify(msg.content) : '');
+            const isToolResponse = msg.type === 'tool_response' || 
+                contentStr.includes('[Tool Response:') ||
+                contentStr.includes('=== SUB-AGENT RESULTS ===');
+
+            if (msg.role === 'model') {
+                let toolCalls = msg.toolCalls;
+                // Self-healing: if no toolCalls array but content has <tool_call
+                if ((!toolCalls || toolCalls.length === 0) && contentStr.includes('<tool_call')) {
+                    const parsed = [];
+                    const toolCallRegex = /<tool_call\s+name=["']([^"']+)["']\s*>([\s\S]*?)<\/tool_call>/gi;
+                    let tcMatch;
+                    while ((tcMatch = toolCallRegex.exec(contentStr)) !== null) {
+                        const toolName = tcMatch[1];
+                        const toolArgsContent = tcMatch[2];
+                        let args = {};
+                        try {
+                            args = JSON.parse(toolArgsContent.trim());
+                        } catch (e) {
+                            const tagRegex = /<([a-zA-Z0-9_-]+)>([\s\S]*?)<\/\1>/g;
+                            let tagMatch;
+                            while ((tagMatch = tagRegex.exec(toolArgsContent)) !== null) {
+                                args[tagMatch[1]] = tagMatch[2].trim();
+                            }
+                        }
+                        const sig = msg.thoughtSignature || msg.thought_signature;
+                        parsed.push({
+                            id: `call_${crypto.randomUUID()}`,
+                            name: toolName,
+                            args: args,
+                            ...(sig ? { thoughtSignature: sig } : {})
+                        });
+                    }
+                    if (parsed.length > 0) {
+                        toolCalls = parsed;
+                    }
                 }
-                const sig = msg.thoughtSignature || msg.thought_signature;
-                if (sig) {
-                    last.thoughtSignature = sig;
+
+                const parts = [];
+                // Extract any leading text before the first tool call from the content
+                let textPart = contentStr;
+                const toolCallIdx = contentStr.indexOf('<tool_call');
+                if (toolCallIdx !== -1) {
+                    textPart = contentStr.substring(0, toolCallIdx).trim();
+                } else if (toolCalls && toolCalls.length > 0) {
+                    textPart = contentStr.trim();
                 }
-            } else {
-                preprocessed.push({
-                    ...msg,
-                    role: role
+                if (textPart) {
+                    parts.push({ text: textPart });
+                }
+
+                if (toolCalls && toolCalls.length > 0) {
+                    for (const rawCall of toolCalls) {
+                        const callObj = rawCall.functionCall || rawCall;
+                        let args = callObj.args || callObj.arguments || {};
+                        if (typeof args === 'string') {
+                            try {
+                                args = JSON.parse(args);
+                            } catch (e) {
+                                console.error("[Gemini] Failed to parse tool call arguments as JSON:", args, e);
+                                args = {};
+                            }
+                        }
+                        const functionCallPart = {
+                            functionCall: {
+                                name: callObj.name || rawCall.name,
+                                args: args
+                            }
+                        };
+                        const sig = rawCall.thoughtSignature || rawCall.thought_signature || callObj.thoughtSignature || callObj.thought_signature || msg.thoughtSignature || msg.thought_signature;
+                        if (sig) {
+                            functionCallPart.thoughtSignature = sig;
+                        } else if (this.config?.model?.includes('3')) {
+                            functionCallPart.thoughtSignature = "skip_thought_signature_validator";
+                        }
+                        parts.push(functionCallPart);
+                    }
+                }
+
+                if (parts.length === 0) {
+                    parts.push({ text: "..." });
+                }
+
+                rawTurns.push({
+                    role: 'model',
+                    parts: parts
+                });
+                continue;
+            }
+
+            // User / System / Tool Response
+            if (isToolResponse) {
+                const responseParts = [];
+                // Robust regex for [Tool Response: name ...] followed by any newline format
+                const regex = /\[Tool Response:\s*([^\]]+)\](?:\r?\n)*/gi;
+                let match;
+                const matches = [];
+
+                while ((match = regex.exec(contentStr)) !== null) {
+                    matches.push({
+                        toolHeader: match[1].trim(),
+                        index: match.index,
+                        contentStart: regex.lastIndex
+                    });
+                }
+
+                let leadingContext = '';
+                if (matches.length > 0) {
+                    if (matches[0].index > 0) {
+                        leadingContext = contentStr.substring(0, matches[0].index).trim();
+                    }
+
+                    for (let i = 0; i < matches.length; i++) {
+                        const current = matches[i];
+                        const next = matches[i + 1];
+                        let sectionContent = next ? contentStr.substring(current.contentStart, next.index) : contentStr.substring(current.contentStart);
+                        sectionContent = sectionContent.replace(/\n\n---\n\n$/, '').trim();
+
+                        const toolName = current.toolHeader.split(/\s+/)[0];
+                        const resultPayload = (i === 0 && leadingContext)
+                            ? `[Context]: ${leadingContext}\n\n${sectionContent}`
+                            : sectionContent;
+
+                        responseParts.push({
+                            functionResponse: {
+                                name: toolName,
+                                response: { result: resultPayload }
+                            }
+                        });
+                    }
+                } else if (contentStr.includes('=== SUB-AGENT RESULTS ===')) {
+                    responseParts.push({
+                        functionResponse: {
+                            name: 'create_sub_agent',
+                            response: { result: contentStr.trim() }
+                        }
+                    });
+                } else if (msg.type === 'tool_response') {
+                    responseParts.push({
+                        functionResponse: {
+                            name: msg.toolName || 'tool',
+                            response: { result: contentStr.trim() }
+                        }
+                    });
+                }
+
+                if (responseParts.length > 0) {
+                    rawTurns.push({
+                        role: 'user',
+                        parts: responseParts,
+                        isFunctionResponse: true
+                    });
+                    continue;
+                }
+            }
+
+            // Standard user or system message
+            if (contentStr.trim()) {
+                rawTurns.push({
+                    role: 'user',
+                    parts: [{ text: contentStr.trim() }]
                 });
             }
         }
 
-        const contents = [];
-        for (const msg of preprocessed) {
-            if (msg.role === 'user' || msg.role === 'model') {
-                const contentStr = typeof msg.content === 'string' ? msg.content : '';
-                const hasToolResponse = msg.role === 'user' && (msg.type === 'tool_response' || contentStr.includes('[Tool Response: '));
-                
-                if (hasToolResponse) {
-                    const parts = [];
-                    const regex = /\[Tool Response: ([^\]]+)\]\n\n/g;
-                    let match;
-                    const matches = [];
-                    
-                    while ((match = regex.exec(contentStr)) !== null) {
-                        matches.push({
-                            toolName: match[1].split(' ')[0],
-                            index: match.index,
-                            contentStart: regex.lastIndex
-                        });
-                    }
-                    
-                    if (matches.length > 0) {
-                        if (matches[0].index > 0) {
-                            const leadingText = contentStr.substring(0, matches[0].index).trim();
-                            if (leadingText) {
-                                parts.push({ text: leadingText });
-                            }
-                        }
-
-                        for (let i = 0; i < matches.length; i++) {
-                            const current = matches[i];
-                            const next = matches[i + 1];
-                            let sectionContent = next ? contentStr.substring(current.contentStart, next.index) : contentStr.substring(current.contentStart);
-                            
-                            sectionContent = sectionContent.replace(/\n\n---\n\n$/, '').trim();
-                            
-                            parts.push({
-                                functionResponse: {
-                                    name: current.toolName,
-                                    response: { result: sectionContent }
-                                }
-                            });
-                        }
-                    } else if (contentStr.trim()) {
-                        parts.push({ text: contentStr.trim() });
-                    }
-
-                    if (parts.length > 0) {
-                        contents.push({
-                            role: 'user',
-                            parts: parts
-                        });
-                        continue;
-                    }
-                }
-                
-                if (msg.role === 'model') {
-                    let toolCalls = msg.toolCalls;
-                    // Self-healing: if no toolCalls array but content has <tool_call
-                    if ((!toolCalls || toolCalls.length === 0) && contentStr.includes('<tool_call')) {
-                        const parsed = [];
-                        const toolCallRegex = /<tool_call\s+name=["']([^"']+)["']\s*>([\s\S]*?)<\/tool_call>/gi;
-                        let tcMatch;
-                        while ((tcMatch = toolCallRegex.exec(contentStr)) !== null) {
-                            const toolName = tcMatch[1];
-                            const toolArgsContent = tcMatch[2];
-                            let args = {};
-                            try {
-                                args = JSON.parse(toolArgsContent.trim());
-                            } catch (e) {
-                                const tagRegex = /<([a-zA-Z0-9_-]+)>([\s\S]*?)<\/\1>/g;
-                                let tagMatch;
-                                while ((tagMatch = tagRegex.exec(toolArgsContent)) !== null) {
-                                    args[tagMatch[1]] = tagMatch[2].trim();
-                                }
-                            }
-                            const sig = msg.thoughtSignature || msg.thought_signature;
-                            parsed.push({
-                                id: `call_${crypto.randomUUID()}`,
-                                name: toolName,
-                                args: args,
-                                ...(sig ? { thoughtSignature: sig } : {})
-                            });
-                        }
-                        if (parsed.length > 0) {
-                            toolCalls = parsed;
-                        }
-                    }
-
-                    if (toolCalls && toolCalls.length > 0) {
-                        const parts = [];
-                        
-                        // Extract any leading text (e.g., thoughts) before the first tool call from the content
-                        let textPart = contentStr;
-                        const toolCallIdx = contentStr.indexOf('<tool_call');
-                        if (toolCallIdx !== -1) {
-                            textPart = contentStr.substring(0, toolCallIdx).trim();
-                        }
-                        if (textPart) {
-                            parts.push({ text: textPart });
-                        }
-
-                        for (const rawCall of toolCalls) {
-                            const callObj = rawCall.functionCall || rawCall;
-                            let args = callObj.args || callObj.arguments || {};
-                            if (typeof args === 'string') {
-                                try {
-                                    args = JSON.parse(args);
-                                } catch (e) {
-                                    console.error("[Gemini] Failed to parse tool call arguments as JSON:", args, e);
-                                    args = {};
-                                }
-                            }
-                            const functionCallPart = {
-                                functionCall: {
-                                    name: callObj.name || rawCall.name,
-                                    args: args
-                                }
-                            };
-                            const sig = rawCall.thoughtSignature || rawCall.thought_signature || callObj.thoughtSignature || callObj.thought_signature || msg.thoughtSignature || msg.thought_signature;
-                            functionCallPart.thoughtSignature = sig || "skip_thought_signature_validator";
-                            parts.push(functionCallPart);
-                        }
-
-                        contents.push({
-                            role: 'model',
-                            parts: parts
-                        });
-                        continue;
-                    }
-                }
-
-                contents.push({ role: msg.role, parts: [{ text: contentStr }] });
-            } else if (msg.type === 'file_context') {
-                const fileContent = `--- File: ${msg.filename || msg.id} ---\n\`\`\`${msg.language || ''}\n${msg.content}\n\`\`\``;
-                if (contents.length > 0 && contents[contents.length - 1].role === 'user') {
-                    contents[contents.length - 1].parts.push({ text: fileContent });
-                } else {
-                    contents.push({ role: 'user', parts: [{ text: fileContent }] });
+        // Phase 2: Handle misplaced directives between model call and its response
+        for (let i = 0; i < rawTurns.length - 1; i++) {
+            const current = rawTurns[i];
+            if (current.role === 'model' && current.parts.some(p => p.functionCall)) {
+                if (rawTurns[i + 1].role === 'user' && !rawTurns[i + 1].isFunctionResponse && i + 2 < rawTurns.length && rawTurns[i + 2].isFunctionResponse) {
+                    const textTurn = rawTurns[i + 1];
+                    rawTurns[i + 1] = rawTurns[i + 2];
+                    rawTurns[i + 2] = textTurn;
                 }
             }
         }
-        return contents;
+
+        // Phase 3: Merge adjacent model turns together (preserving both text and functionCall parts)
+        const consolidatedTurns = [];
+        for (const turn of rawTurns) {
+            if (!turn.parts || turn.parts.length === 0) continue;
+            const last = consolidatedTurns.length > 0 ? consolidatedTurns[consolidatedTurns.length - 1] : null;
+            if (last && last.role === 'model' && turn.role === 'model') {
+                last.parts = last.parts.concat(turn.parts);
+            } else if (last && last.role === 'user' && turn.role === 'user' && !last.isFunctionResponse && !turn.isFunctionResponse) {
+                const lastText = last.parts.map(p => p.text).filter(Boolean).join('\n\n');
+                const turnText = turn.parts.map(p => p.text).filter(Boolean).join('\n\n');
+                last.parts = [{ text: [lastText, turnText].filter(Boolean).join('\n\n') }];
+            } else {
+                consolidatedTurns.push(turn);
+            }
+        }
+
+        // Phase 4: Pair validation
+        // Guarantee:
+        // 1. Every model turn with functionCall must be immediately followed by a user turn with functionResponse.
+        //    If not, downgrade the functionCall parts to plain text.
+        // 2. Every user turn with functionResponse must be immediately preceded by a model turn with matching functionCall.
+        //    If not, downgrade the functionResponse parts to plain text.
+        for (let i = 0; i < consolidatedTurns.length; i++) {
+            const turn = consolidatedTurns[i];
+            if (turn.role === 'model') {
+                const callParts = turn.parts.filter(p => p.functionCall);
+                if (callParts.length > 0) {
+                    const nextTurn = i + 1 < consolidatedTurns.length ? consolidatedTurns[i + 1] : null;
+                    const nextHasResponse = nextTurn && nextTurn.role === 'user' && nextTurn.parts.some(p => p.functionResponse);
+
+                    if (!nextHasResponse) {
+                        turn.parts = turn.parts.map(p => {
+                            if (p.functionCall) {
+                                const argsStr = typeof p.functionCall.args === 'object' ? JSON.stringify(p.functionCall.args) : (p.functionCall.args || '{}');
+                                return { text: `[Action: ${p.functionCall.name} args=${argsStr}]` };
+                            }
+                            return p;
+                        });
+                    } else {
+                        const responseNames = new Set(nextTurn.parts.filter(p => p.functionResponse).map(p => p.functionResponse.name));
+                        for (const cp of callParts) {
+                            if (!responseNames.has(cp.functionCall.name)) {
+                                nextTurn.parts.push({
+                                    functionResponse: {
+                                        name: cp.functionCall.name,
+                                        response: { result: "Success" }
+                                    }
+                                });
+                            }
+                        }
+                        const textInResponseTurn = nextTurn.parts.filter(p => p.text).map(p => p.text).join('\n\n').trim();
+                        nextTurn.parts = nextTurn.parts.filter(p => p.functionResponse);
+                        if (textInResponseTurn && nextTurn.parts.length > 0) {
+                            const firstResp = nextTurn.parts[0].functionResponse;
+                            const prevRes = typeof firstResp.response?.result === 'string' ? firstResp.response.result : JSON.stringify(firstResp.response || {});
+                            firstResp.response = { result: `${textInResponseTurn}\n\n${prevRes}` };
+                        }
+                    }
+                }
+            } else if (turn.role === 'user') {
+                const responseParts = turn.parts.filter(p => p.functionResponse);
+                if (responseParts.length > 0) {
+                    const prevTurn = i > 0 ? consolidatedTurns[i - 1] : null;
+                    const prevHasCall = prevTurn && prevTurn.role === 'model' && prevTurn.parts.some(p => p.functionCall);
+
+                    if (!prevHasCall) {
+                        turn.parts = turn.parts.map(p => {
+                            if (p.functionResponse) {
+                                const resStr = typeof p.functionResponse.response?.result === 'string'
+                                    ? p.functionResponse.response.result
+                                    : JSON.stringify(p.functionResponse.response || {});
+                                return { text: `[Tool Response: ${p.functionResponse.name}]\n\n${resStr}` };
+                            }
+                            return p;
+                        });
+                        delete turn.isFunctionResponse;
+                    }
+                }
+            }
+        }
+
+        // Phase 5: Merge any remaining adjacent turns of the same role
+        const mergedTurns = [];
+        for (const turn of consolidatedTurns) {
+            if (!turn.parts || turn.parts.length === 0) continue;
+
+            const last = mergedTurns.length > 0 ? mergedTurns[mergedTurns.length - 1] : null;
+            if (last && last.role === turn.role) {
+                const lastHasFR = last.parts.some(p => p.functionResponse);
+                const turnHasFR = turn.parts.some(p => p.functionResponse);
+
+                if (lastHasFR && turnHasFR) {
+                    last.parts = last.parts.concat(turn.parts);
+                } else if (!lastHasFR && !turnHasFR) {
+                    const lastText = last.parts.map(p => p.text).filter(Boolean).join('\n\n');
+                    const turnText = turn.parts.map(p => p.text).filter(Boolean).join('\n\n');
+                    const combined = [lastText, turnText].filter(Boolean).join('\n\n');
+                    last.parts = [{ text: combined }];
+                } else {
+                    const textParts = (lastHasFR ? turn.parts : last.parts).filter(p => p.text).map(p => p.text).join('\n\n');
+                    const frParts = (lastHasFR ? last.parts : turn.parts).filter(p => p.functionResponse);
+                    if (textParts && frParts.length > 0) {
+                        const firstResp = frParts[0].functionResponse;
+                        const prevRes = typeof firstResp.response?.result === 'string' ? firstResp.response.result : JSON.stringify(firstResp.response || {});
+                        firstResp.response = { result: `${prevRes}\n\n[Note]: ${textParts}` };
+                    }
+                    last.parts = frParts;
+                }
+            } else {
+                mergedTurns.push(turn);
+            }
+        }
+
+        // Phase 6: Ensure contents starts with 'user' role
+        if (mergedTurns.length === 0) {
+            return [{ role: 'user', parts: [{ text: "Hello" }] }];
+        }
+
+        if (mergedTurns[0].role === 'model') {
+            mergedTurns.unshift({
+                role: 'user',
+                parts: [{ text: "Please continue." }]
+            });
+        }
+
+        // Phase 7: Clean up each turn, remove empty parts, ensure non-empty
+        const finalContents = [];
+        for (const turn of mergedTurns) {
+            const cleanParts = (turn.parts || []).filter(p => {
+                if (p.text !== undefined) return p.text.trim().length > 0;
+                if (p.functionCall !== undefined) return true;
+                if (p.functionResponse !== undefined) return true;
+                return false;
+            });
+
+            if (cleanParts.length === 0) {
+                cleanParts.push({ text: "..." });
+            }
+
+            finalContents.push({
+                role: turn.role,
+                parts: cleanParts
+            });
+        }
+
+        // Phase 8: For Gemini streamGenerateContent, conversation should end on 'user' turn
+        if (finalContents.length > 0 && finalContents[finalContents.length - 1].role === 'model') {
+            finalContents.push({
+                role: 'user',
+                parts: [{ text: "Please continue." }]
+            });
+        }
+
+        return finalContents;
     }
+
 
     async _countTokens(messages) {
         if (!this.config.apiKey) {
@@ -970,6 +1148,9 @@ class Gemini extends AI {
                     while (actualTokens > limit && candidateMessages.length > 1) {
                         candidateMessages.shift();
                         actualTokens = candidateMessages.reduce((sum, m) => sum + (typeof m.tokenCount === 'number' ? m.tokenCount : this.estimateTokens([m])), 0);
+                    }
+                    while (candidateMessages.length > 1 && (candidateMessages[0].role === 'model' || candidateMessages[0].type === 'tool_response' || (candidateMessages[0].content && candidateMessages[0].content.startsWith('[Tool Response:')))) {
+                        candidateMessages.shift();
                     }
                     processedMessages = candidateMessages;
                     console.info(`[Gemini] Truncated context to ${processedMessages.length} messages (${actualTokens} tokens) to fit maxInputTokens limit of ${limit}`);
