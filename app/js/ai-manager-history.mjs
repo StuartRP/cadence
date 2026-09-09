@@ -1631,7 +1631,7 @@ class AIManagerHistory {
 							id: crypto.randomUUID(),
 							role: "user",
 							type: "tool_response",
-							content: `[Tool Response: run_command]\nCommand execution rejected by user.${userNote ? ` User feedback: ${userNote}` : ''}`,
+							content: `[Tool Response: run_command]\n\nCommand execution rejected by user.${userNote ? ` User feedback: ${userNote}` : ''}`,
 							timestamp: Date.now()
 						};
 						activeSession.messages.push(toolResponseMessage);
@@ -1683,7 +1683,7 @@ class AIManagerHistory {
 							id: crypto.randomUUID(),
 							role: "user",
 							type: "tool_response",
-							content: `[Tool Response: run_command]\n${cmdResult}`,
+							content: `[Tool Response: run_command]\n\n${cmdResult}`,
 							timestamp: Date.now()
 						};
 						activeSession.messages.push(toolResponseMessage);
@@ -3330,8 +3330,8 @@ class AIManagerHistory {
 					const currentMsg = contextForAI[insertIdx];
 					const prevMsg = contextForAI[insertIdx - 1];
 					
-					// A tool response starts with "[Tool Response: "
-					const isToolResponse = currentMsg && currentMsg.content && currentMsg.content.startsWith("[Tool Response:");
+					// A tool response starts with "[Tool Response: " or has type tool_response
+					const isToolResponse = currentMsg && (currentMsg.type === "tool_response" || (currentMsg.content && currentMsg.content.startsWith("[Tool Response:")));
 					const prevIsModelWithTools = prevMsg && prevMsg.role === "model" && prevMsg.toolCalls && prevMsg.toolCalls.length > 0;
 					
 					if (isToolResponse || prevIsModelWithTools) {

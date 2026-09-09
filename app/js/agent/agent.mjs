@@ -164,9 +164,9 @@ export class Agent {
 			if (compiledResults) {
 				const toolResponseMessage = {
 					id: crypto.randomUUID(),
-					role: "system", // Should this be "system" or "tool_response"?
+					role: "user",
 					type: "tool_response",
-					content: compiledResults,
+					content: `[Tool Response: create_sub_agent]\n\n${compiledResults}`,
 					timestamp: Date.now()
 				};
 				session.messages.push(toolResponseMessage);
