@@ -2129,6 +2129,134 @@ const topfolderMenu = document.getElementById("top_folder_context")
 // clicks a menu item. Set in handleFileContextMenu for both the editor-tab and
 // filelist paths; read by the shared click handler below.
 let _contextItem = null
+// True when the context menu was opened from an editor file/folder tab (as
+// opposed to the filelist). Only then do we offer "Open Files Here", since
+// the filelist already shows the file in place.
+let _contextFromTab = false
+
+const _revealItem = document.getElementById("file_context_reveal")
+const _revealSplit = document.getElementById("file_context_reveal_split")
+const _setRevealVisible = (visible) => {
+	if (_revealItem) _revealItem.style.display = visible ? "" : "none"
+	if (_revealSplit) _revealSplit.style.display = visible ? "" : "none"
+}
+
+// Reveal a file/folder in the sidebar file list: show the sidebar, switch to
+// the files panel, expand all ancestor folders, then scroll to and flash the
+// target item. Used by the "Open Files Here" context-menu command (opened from
+// an editor tab) so the user can see where a file lives in the tree.
+const revealInFileList = async (path) => {
+	if (!path) return
+	const fl = ui.fileList
+	if (!fl) return
+
+	// 1. Make the sidebar visible (it is hidden by default via the body class).
+	if (!document.body.classList.contains("showSidebar")) {
+		document.body.classList.add("showSidebar")
+		const sb = ui.sidebar
+		const mc = ui.mainContent
+		if (sb && mc) {
+			const w = sb.offsetWidth || 350
+			sb.style.width = w + "px"
+			mc.style.left = w + "px"
+		}
+	}
+
+	// 2. Switch the sidebar to the files panel.
+	if (ui.iconTabBar) ui.iconTabBar.activeTabById = "folder"
+
+	// 3. Compute the ancestor folder paths (everything except the leaf).
+	// Trim leading slashes: the item `title` attributes are built from the
+	// workspace root with no leading "/" (see `readAndOrderDirectory`), so a
+	// path like "/src/foo.mjs" must be searched as "src/foo.mjs".
+	const norm = String(path).replace(/\\/g, "/").replace(/^\.\//, "").replace(/^\/+/, "").replace(/\/+$/, "")
+	const parts = norm.split("/").filter(Boolean)
+	const ancestors = []
+	for (let i = 1; i < parts.length; i++) {
+		ancestors.push(parts.slice(0, i).join("/"))
+	}
+
+	// 4. Pre-load any missing ancestor trees into the data model so the full
+	//    path is present when we re-render. The `openFolders` setter below
+	//    triggers a re-render that expands every folder in the set and loads
+	//    its children (cascading), so the target item ends up in the DOM.
+	const findNode = (list, p) => (list || []).find((n) => n.path === p)
+	let level = fl._tree || []
+	for (const a of ancestors) {
+		const node = findNode(level, a)
+		if (!node) break // ancestor not in the tree; stop
+		if (!node.tree) node.tree = await readAndOrderDirectory(node)
+		level = node.tree || []
+	}
+
+	const newOpen = new Set(fl.openFolders)
+	ancestors.forEach((a) => newOpen.add(a))
+	fl.openFolders = Array.from(newOpen)
+
+	// 5. Wait for the target item to actually be in the DOM. The `openFolders`
+	//    setter above triggers a re-render that expands every ancestor folder
+	//    and loads its children via async IIFEs (`readAndOrderDirectory`), so
+	//    the target leaf only appears once its parent folder's load resolves.
+	//    A short one-shot settle (the old approach) would time out while the
+	//    parent was still loading and give up -> no scroll, no flash. Instead
+	//    we poll until the node exists (up to ~6s), then do a brief layout
+	//    stabilization wait so the container height stops shifting before we
+	//    scroll.
+	const frames = (n) => new Promise((r) => {
+		const step = () => (n-- <= 0 ? r() : requestAnimationFrame(step))
+		step()
+	})
+	// Look up the target with a *contains* title selector rather than an
+	// exact match: the path we were given can differ from the item `title`
+	// by a leading "/" (titles are built from the workspace root, no leading
+	// slash), so we trim the leading slash above and match on the remainder.
+	// A contains match is also tolerant of any other prefix drift.
+	const byPath = () => fl.querySelector(`ui-file-item[title*="${norm}"]`)
+	const el = await (async () => {
+		const deadline = Date.now() + 6000
+		while (Date.now() < deadline) {
+			if (byPath()) break
+			await frames(1)
+		}
+		// The target's own subtree is rendered; give the layout a couple of
+		// frames to settle so the scroll offset we compute is stable.
+		await frames(3)
+		return byPath()
+	})()
+	if (el) {
+		// 6. Scroll the file list container (fl is the scrollable element, per
+		//    `ui-sidebar-panel > ui-file-list { overflow-y: auto }`) so the
+		//    target ends up centered. A direct offset scroll is deterministic
+		//    and can't be interrupted the way `scrollIntoView` can by
+		//    in-flight layout shifts.
+		const cRect = fl.getBoundingClientRect()
+		const eRect = el.getBoundingClientRect()
+		const top = fl.scrollTop + (eRect.top - cRect.top) - (fl.clientHeight - eRect.height) / 2
+		fl.scrollTo({ top: Math.max(0, top), behavior: "smooth" })
+
+		// 7. Flash the target. A late cascading `_render` can rebuild the
+		//    subtree and silently drop the class, so re-query the node before
+		//    adding it and restart the animation via a forced reflow. We do not
+		//    call `el.focus()`: the ripple and `:focus` background would
+		//    compete with the flash.
+		const flash = () => {
+			const node = byPath()
+			if (!node) return
+			node.classList.remove("reveal-flash")
+			void node.offsetWidth // restart the keyframe animation
+			node.classList.add("reveal-flash")
+			setTimeout(() => {
+				const n = byPath()
+				if (n) n.classList.remove("reveal-flash")
+			}, 1400)
+		}
+		flash()
+		// Guard: if a late sibling folder finishes loading and its cascading
+		// `_render` rebuilds the subtree (dropping the class), re-apply the
+		// flash once more so the target is still highlighted.
+		setTimeout(flash, 900)
+	}
+}
 
 fileMenu.click = folderMenu.click = topfolderMenu.click = async (action) => {
 	const file = _contextItem
@@ -2136,6 +2264,10 @@ fileMenu.click = folderMenu.click = topfolderMenu.click = async (action) => {
 	const filePath = file.path || file.name;
 
 	switch (action) {
+		case "reveal":
+			// "Open Files Here": reveal this file in the sidebar file list.
+			await revealInFileList(filePath)
+			break
 		case "info":
 			try {
 				const info = await conduitClient.wsFileInfo(filePath);
@@ -2314,11 +2446,13 @@ const isFileTab = (tab) => {
 
 const handleFileContextMenu = (e) => {
 	let menu = folderMenu
+	_contextFromTab = false
 
 	// Editor file/folder tabs reuse the filelist context menus. The TabBar sets
 	// `e.tab` on the context event; we build a synthetic item so the shared
 	// click handler (which reads the module-scope `_contextItem`) works for both.
 	if (e.tab && e.tab.config) {
+		_contextFromTab = true
 		const tab = e.tab
 		if (!isFileTab(tab)) return // settings / plan / diff / scratch tabs: no menu
 		const isDir = !!(tab.config.isDir || tab.config.handle?.isDir)
@@ -2342,12 +2476,17 @@ const handleFileContextMenu = (e) => {
 		} else {
 			menu = fileMenu
 		}
+		// "Open Files Here" only makes sense for a file opened from the editor
+		// tab bar (the filelist already shows the file in place). The item lives
+		// in the file context menu, so it is only relevant when menu === fileMenu.
+		_setRevealVisible(menu === fileMenu)
 		return menu.showAt(e)
 	}
 
 	const fileItem = e.srcElement.closest("ui-file-item")
 	if (!fileItem) return
 	_contextItem = fileItem.item
+	_setRevealVisible(false) // from the filelist: the file is already visible
 	if (workspace.folders.includes(fileItem.item.path || fileItem.item)) {
 		menu = topfolderMenu
 	} else {
