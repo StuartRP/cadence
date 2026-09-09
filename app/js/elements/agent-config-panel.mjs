@@ -161,11 +161,11 @@ export class AgentConfigPanel extends Block {
 
 		createToggleRow("default-agent-mode", "Default Agent Mode", "Start new sessions in Agent Mode automatically.", "defaultAgentMode");
 		createToggleRow("default-planning-mode", "Default Planning Mode", "Start new sessions with Planning Mode enabled.", "defaultPlanningMode");
-		createToggleRow("default-forgiveness-mode", "Forgiveness Mode", "Commit edits immediately to disk with robust single-click rollback safety.", "aiForgivenessMode");
-		createToggleRow("default-allow-sub-agents", "Default Allow Sub-Agents", "Start new sessions with sub-agents allowed automatically.", "defaultAllowSubAgents");
-		createToggleRow("default-allow-run-command", "Default Allow Terminal Commands", "Start new sessions with terminal command execution allowed automatically.", "defaultAllowRunCommand");
+		createToggleRow("default-forgiveness-mode", "Default Forgiveness Mode", "Commit edits immediately to disk (after validation checks)", "aiForgivenessMode");
+		createToggleRow("default-allow-sub-agents", "Default Allow Sub-Agents", "Start new sessions with sub-agents allowed.", "defaultAllowSubAgents");
+		createToggleRow("default-allow-run-command", "Default Allow Terminal Commands", "Start new sessions with terminal commands allowed.", "defaultAllowRunCommand");
 		createToggleRow("default-auto-milestones", "Default Auto-Milestones on 'done'", "Automatically freeze a checkpoint milestone when the agent finishes a cycle in new sessions.", "defaultAutoMilestones");
-		createToggleRow("default-auto-rollback-on-failures", "Auto-Rollback on Edit Failures", "Automatically roll back a file when consecutive edits fail.", "defaultAutoRollbackOnFailures");
+		createToggleRow("default-auto-rollback-on-failures", "Default Auto-Rollback on Edit Failures", "Automatically roll back a file when consecutive edits fail.", "defaultAutoRollbackOnFailures");
 
 		const createNumberInputRow = (id, title, desc, key, defaultValue, min = 1, max = 10) => {
 			const wrapper = document.createElement("div");

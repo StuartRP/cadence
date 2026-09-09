@@ -649,6 +649,19 @@ ui-file-item[loading] {
     animation-iteration-count: infinite;
 }
 
+/* Brief highlight used when revealing a file in the file list (e.g. "Open Files Here").
+   The background sweeps in from the theme accent and fades out, drawing the eye to
+   the item without permanently altering its resting appearance. */
+@keyframes reveal-flash {
+    0% { background: var(--theme); }
+    40% { background: var(--theme); }
+    100% { background: transparent; }
+}
+
+ui-file-item.reveal-flash {
+    animation: reveal-flash 1.4s ease-in-out;
+}
+
 /* Google Material Icon fonts */
 ui-icon {
     font-family: "Material Symbols Outlined";

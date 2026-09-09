@@ -28,14 +28,14 @@ export const tools = [
 	{
 		name: "run_command",
 		description:
-			"Run a shell command. Use `cwd` for multi-root workspaces. Requires user approval unless whitelisted.",
+			"Run a shell command (auto cwd to the project root).",
 		parameters: {
 			type: "object",
 			properties: {
 				command: { type: "string", description: "The shell command to run." },
 				cwd: {
 					type: "string",
-					description: "Working directory: root folder name, relative, or absolute path.",
+					description: "Working directory (if not root) relative to root",
 				},
 				timeoutMs: { type: "number", description: "Timeout in ms before terminating (default: 60000)." },
 			},
@@ -45,7 +45,7 @@ export const tools = [
 	{
 		name: "validate_syntax",
 		description:
-			"Validate JS/JSON/HTML/CSS syntax without writing to disk. Accepts full `content` or a `search`/`replace` pair for simulated edits. Returns 'Valid syntax' or line/column SyntaxError details.",
+			"Validate JS/JSON/HTML/CSS/Go syntax without writing to disk. Accepts full `content` or a `search`/`replace` pair for simulated edits. Returns 'Valid syntax' or line/column SyntaxError details.",
 		parameters: {
 			type: "object",
 			properties: {
