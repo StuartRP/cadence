@@ -81,6 +81,7 @@ class AIManagerSettings {
             defaultAutoMilestones: aiManager.config.defaultAutoMilestones ?? true,
             defaultAutoRollbackOnFailures: aiManager.config.defaultAutoRollbackOnFailures ?? false,
             defaultAutoRollbackThreshold: aiManager.config.defaultAutoRollbackThreshold ?? 3,
+            enableGlowAnimation: aiManager.config.enableGlowAnimation !== false,
             systemPromptSpecialization: systemPromptConfig.specialization,
             systemPromptTechnologies: (systemPromptConfig.technologies || []).join(", "),
             systemPromptAvoidedTechnologies: (systemPromptConfig.avoidedTechnologies || []).join(", "),
@@ -95,6 +96,7 @@ class AIManagerSettings {
         // Build the schema that defines the form structure
         const schema = [
             { type: "checkbox", id: "use-workspace-settings", label: "Use workspace-specific settings" },
+            { type: "checkbox", id: "enableGlowAnimation", label: "Enable Glowing Blob Animation on Chat History" },
             { type: "checkbox", id: "forgivenessMode", label: "Forgiveness Mode (Apply edits immediately, rollback anytime)" },
             { type: "checkbox", id: "defaultAgentMode", label: "Default Agent Mode for New Chats" },
             { type: "checkbox", id: "defaultPlanningMode", label: "Default Planning Mode for New Chats" },
@@ -225,6 +227,9 @@ class AIManagerSettings {
         localStorage.setItem("defaultAutoMilestones", aiManager.config.defaultAutoMilestones);
         localStorage.setItem("defaultAutoRollbackOnFailures", aiManager.config.defaultAutoRollbackOnFailures);
         localStorage.setItem("defaultAutoRollbackThreshold", aiManager.config.defaultAutoRollbackThreshold);
+
+        // --- Save Glow Animation Setting ---
+        aiManager.setGlowAnimationEnabled(!!values.enableGlowAnimation);
 
         // --- Save Forgiveness Mode ---
         aiManager.config.defaultForgivenessMode = !!values.forgivenessMode;

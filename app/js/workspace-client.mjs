@@ -55,7 +55,9 @@ export const workspaceClient = {
 
     async getSession(id) {
         try {
-            const res = await fetch(`${API_BASE}/session?id=${encodeURIComponent(id)}`);
+            const res = await fetch(`${API_BASE}/session?id=${encodeURIComponent(id)}&t=${Date.now()}`, {
+                cache: 'no-store'
+            });
             if (!res.ok) {
                 if (res.status === 404) return undefined;
                 throw new Error(`Failed to fetch session: ${res.statusText}`);

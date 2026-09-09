@@ -124,20 +124,69 @@ class TerminalManager {
 	 * @param {HTMLElement} containerElement - The DOM element to open the terminal in.
 	 * @returns {Promise<{term: Terminal, fitAddon: FitAddon}|null>} Object with xterm instance and fit addon, or null if loading fails.
 	 */
-	async _createTerminalInstance(containerElement) {
-		// Load xterm.js and addons from CDN only once
-		if (!this._initialized) {
-			try {
-				await addStylesheet("https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css");
-				await loadScript("https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js");
-				await loadScript("https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js");
-				await loadScript("https://cdn.jsdelivr.net/npm/xterm-addon-web-links@0.8.0/lib/xterm-addon-web-links.min.js"); // Load WebLinksAddon
-				this._initialized = true; // Mark scripts loaded
-			} catch (error) {
-				this.panel.textContent = "Error loading terminal scripts."; // Display error on the panel
-				console.error(error);
-				return null; // Return null if script loading fails
+	/**
+	 * Loads xterm.js and its addons from CDN, verifying the required globals
+	 * actually exist on `window` rather than trusting `_initialized`. A script
+	 * tag can exist while its global was never set (e.g. a prior load raced, or
+	 * `loadScript` early-returned on a cached tag), so we (re)load any missing
+	 * global on demand. This makes 2nd+ terminal creation resilient instead of
+	 * throwing on an undefined `window.WebLinksAddon`.
+	 * @returns {Promise<boolean>} true if all globals are available, false otherwise.
+	 */
+	async _ensureScripts() {
+		// Load a script, forcing a real re-fetch if a stale <script> tag is
+		// already in the DOM. `loadScript` early-returns when the tag exists, so
+		// a previously-failed load (tag present, global never set) would never
+		// recover. Removing the tag first guarantees a fresh network fetch.
+		const loadIfMissing = async (src, globalName, attempts = 3) => {
+			for (let i = 0; i < attempts; i++) {
+				if (window[globalName]) return true;
+				const existing = document.querySelector(`script[src="${src}"]`);
+				if (existing) existing.remove();
+				try {
+					await loadScript(src);
+				} catch (e) {
+					console.warn(`xterm script load attempt ${i + 1}/${attempts} failed for ${src}`, e);
+				}
+				if (window[globalName]) return true;
 			}
+			return !!window[globalName];
+		};
+
+		try {
+			if (!window.Terminal) {
+				await addStylesheet("https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css");
+				await loadIfMissing("https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js", "Terminal");
+			}
+			if (!window.FitAddon) {
+				await loadIfMissing("https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js", "FitAddon");
+			}
+			if (!window.WebLinksAddon) {
+				await loadIfMissing("https://cdn.jsdelivr.net/npm/xterm-addon-web-links@0.8.0/lib/xterm-addon-web-links.min.js", "WebLinksAddon");
+			}
+			this._initialized = true; // Mark scripts loaded
+		} catch (error) {
+			this.panel.textContent = "Error loading terminal scripts."; // Display error on the panel
+			console.error(error);
+			return false;
+		}
+
+		// Safety net: if a global is still missing after (re)loading, report it.
+		if (!window.Terminal || !window.FitAddon || !window.WebLinksAddon) {
+			console.error("xterm.js globals missing after load attempt:", {
+				Terminal: !!window.Terminal,
+				FitAddon: !!window.FitAddon,
+				WebLinksAddon: !!window.WebLinksAddon,
+			});
+			return false;
+		}
+		return true;
+	}
+
+	async _createTerminalInstance(containerElement) {
+		// Ensure xterm.js and addons are loaded and their globals are present.
+		if (!await this._ensureScripts()) {
+			return null; // Abort if scripts failed to load
 		}
 
 		// Create a new xterm.js instance
@@ -196,11 +245,19 @@ class TerminalManager {
 		
 		let dir = "";
 		
+		// 0. Explicit directory requested by an external caller (e.g. "Open Terminal Here" from an AI session tab)
+		if (this._pendingDir) {
+			dir = this._pendingDir;
+			this._pendingDir = null; // Consume the override so it only applies to this connection
+		}
+
 		const activeEl = document.activeElement;
 		const isTerminalFocused = activeEl && (activeEl.closest?.(".terminal-instance-container") || activeEl.closest?.(".terminal-panel-container"));
 
-		// 1. If terminal currently has focus (e.g. CTRL+N from terminal), prioritize current terminal's CWD
-		if (isTerminalFocused && this._activeSessionId) {
+		// 1. If terminal currently has focus (e.g. CTRL+N from terminal), prioritize current terminal's CWD.
+		// Only when no explicit directory was requested (step 0), so an "Open Terminal Here"
+		// override is not clobbered by the currently-focused terminal's CWD.
+		if (!dir && isTerminalFocused && this._activeSessionId) {
 			const activeSession = this._sessions.get(this._activeSessionId);
 			if (activeSession && activeSession.cwd) {
 				dir = activeSession.cwd;
@@ -234,7 +291,16 @@ class TerminalManager {
 			}
 		}
 
-		// 4. Fallback: First root folder of the current project workspace
+		// 4. Root of the currently active AI session (first pinned root)
+		if (!dir) {
+			const activeAISession = window.ui?.aiManager?.activeSession;
+			const aiRoot = activeAISession?.pinnedRoots?.[0];
+			if (aiRoot && typeof aiRoot === 'string') {
+				dir = aiRoot;
+			}
+		}
+
+		// 5. Fallback: First root folder of the current project workspace
 		if (!dir) {
 			const rawFolder = window.workspace?.folders?.[0];
 			dir = typeof rawFolder === 'string' ? rawFolder : (rawFolder?.path || rawFolder?.name || "");
@@ -359,14 +425,11 @@ class TerminalManager {
 	 * Creates a new terminal session, including a new tab, xterm.js instance, and WebSocket connection.
 	 */
 	async createNewTerminalSession() {
-		// Ensure xterm.js scripts are loaded globally first
-		if (!this._initialized) {
-			// Attempt to load scripts by creating a dummy instance if needed
-			await this._createTerminalInstance(document.createElement("div"));
-			if (!this._initialized) {
-				console.error("Failed to load xterm.js scripts. Cannot create new terminal session.");
-				return;
-			}
+		// Ensure xterm.js scripts are loaded globally first (verifies the
+		// globals actually exist, re-loading any that are missing).
+		if (!await this._ensureScripts()) {
+			console.error("Failed to load xterm.js scripts. Cannot create new terminal session.");
+			return;
 		}
 		const sessionId = `term-${this._nextSessionId++}`;
 		const sessionName = `Terminal ${this._nextSessionId - 1}`;

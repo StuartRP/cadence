@@ -268,6 +268,7 @@ func sessionHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Missing session ID", http.StatusBadRequest)
 			return
 		}
+		w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
 		if globalDB != nil {
 			data, rev, err := globalDB.GetSession(id)
 			if err == nil {
@@ -354,6 +355,8 @@ func sessionsHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+
+	w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
 
 	// First attempt instant in-memory index read via bbolt
 	if globalDB != nil {

@@ -159,33 +159,25 @@ export class AgentConfigPanel extends Block {
 			grid.appendChild(wrapper);
 		};
 
-		createToggleRow("default-forgiveness-mode", "Forgiveness Mode", "Commit edits immediately to disk with robust single-click rollback safety.", "aiForgivenessMode");
 		createToggleRow("default-agent-mode", "Default Agent Mode", "Start new sessions in Agent Mode automatically.", "defaultAgentMode");
 		createToggleRow("default-planning-mode", "Default Planning Mode", "Start new sessions with Planning Mode enabled.", "defaultPlanningMode");
-		createToggleRow("default-allow-sub-agents", "Default Allow Sub-Agents", "Start new sessions with sub-agents allowed automatically.", "defaultAllowSubAgents");
-		createToggleRow("default-allow-run-command", "Default Allow Terminal Commands", "Start new sessions with terminal command execution allowed automatically.", "defaultAllowRunCommand");
+		createToggleRow("default-forgiveness-mode", "Default Forgiveness Mode", "Commit edits immediately to disk (after validation checks)", "aiForgivenessMode");
+		createToggleRow("default-allow-sub-agents", "Default Allow Sub-Agents", "Start new sessions with sub-agents allowed.", "defaultAllowSubAgents");
+		createToggleRow("default-allow-run-command", "Default Allow Terminal Commands", "Start new sessions with terminal commands allowed.", "defaultAllowRunCommand");
 		createToggleRow("default-auto-milestones", "Default Auto-Milestones on 'done'", "Automatically freeze a checkpoint milestone when the agent finishes a cycle in new sessions.", "defaultAutoMilestones");
-		createToggleRow("default-auto-rollback-on-failures", "Auto-Rollback on Edit Failures", "Automatically roll back a file when consecutive edits fail.", "defaultAutoRollbackOnFailures");
+		createToggleRow("default-auto-rollback-on-failures", "Default Auto-Rollback on Edit Failures", "Automatically roll back a file when consecutive edits fail.", "defaultAutoRollbackOnFailures");
 
-		const createNumberInputRow = (id, title, desc, key, defaultValue) => {
+		const createNumberInputRow = (id, title, desc, key, defaultValue, min = 1, max = 10) => {
 			const wrapper = document.createElement("div");
-			wrapper.className = "toggle-row";
-			wrapper.style.display = "flex";
-			wrapper.style.alignItems = "center";
-			wrapper.style.gap = "12px";
+			wrapper.className = "toggle-row number-input-row";
 
 			const input = document.createElement("input");
 			input.type = "number";
 			input.id = id;
-			input.min = "1";
-			input.max = "10";
-			input.style.width = "60px";
-			input.style.padding = "4px";
-			input.style.borderRadius = "4px";
-			input.style.border = "1px solid var(--border)";
-			input.style.background = "var(--bg-input, rgba(0,0,0,0.1))";
-			input.style.color = "var(--text)";
-			
+			input.min = min;
+			input.max = max;
+			input.className = "setting-number-input";
+
 			const stored = localStorage.getItem(key);
 			input.value = stored !== null ? stored : defaultValue;
 			input.onchange = () => {
@@ -197,7 +189,6 @@ export class AgentConfigPanel extends Block {
 
 			const meta = document.createElement("div");
 			meta.className = "setting-meta";
-			meta.style.flex = "1";
 
 			const titleSpan = document.createElement("span");
 			titleSpan.className = "toggle-label";
@@ -215,8 +206,10 @@ export class AgentConfigPanel extends Block {
 			grid.appendChild(wrapper);
 		};
 
-		createNumberInputRow("max-sub-agents", "Max Sub-Agents", "Maximum number of parallel sub-agents the main agent is permitted to spawn.", "maxSubAgents", "3");
-		createNumberInputRow("default-auto-rollback-threshold", "Auto-Rollback Failure Count", "Number of consecutive failed edits before rolling back the file (default 3).", "defaultAutoRollbackThreshold", "3");
+		createNumberInputRow("default-auto-rollback-threshold", "Auto-Rollback Failure Count", "Number of consecutive failed edits before rolling back the file (default 3).", "defaultAutoRollbackThreshold", "3", 1, 10);
+		createNumberInputRow("default-max-prefill", "Max Context Pre-fill (%)", "Default upper threshold before context culling triggers (default 80).", "contextPrefillMaxPercentage", "80", 20, 100);
+		createNumberInputRow("default-min-prefill", "Min Context Pre-fill (%)", "Default cull target when max pre-fill is triggered (default 40).", "contextPrefillMinPercentage", "40", 10, 100);
+		createNumberInputRow("max-sub-agents", "Max Sub-Agents", "Maximum number of parallel sub-agents the main agent is permitted to spawn.", "maxSubAgents", "3", 1, 20);
 
 		this.container.appendChild(this.defaultsAccordion);
 	}

@@ -25,7 +25,8 @@ class LlamaCpp extends AI {
             n_predict: 4096,
             stop: ["</s>", "<|end|>", "<|im_end|>", "Llama:", "User:", "Assistant:"],
             thinkingLevel: "medium",
-            maxTurns: 0
+            maxTurns: 0,
+            slotAffinity: true
         };
         this.MAX_CONTEXT_TOKENS = 32768; // Default, will try to query if possible
 
@@ -50,6 +51,7 @@ class LlamaCpp extends AI {
                 ]
             },
             maxTurns: { type: "number", label: "Max Agent Turns (0 for unlimited)", default: 0 },
+            slotAffinity: { type: "checkbox", label: "Slot Affinity (reuse KV cache per session)", default: true },
             system: { type: "textarea", label: "System Prompt Override", default: "", multiline: true }
         };
     }
@@ -140,6 +142,52 @@ class LlamaCpp extends AI {
             }
         } catch (e) {
             console.warn("[Llama.cpp] Could not query model info:", e.message);
+        }
+    }
+
+    getSlotKey(session) {
+        const sessionId = (session && session.id) ? session.id : "default";
+        return `${this.config.server}::${sessionId}`;
+    }
+
+    async _fetchSlots() {
+        try {
+            const res = await fetch(`${this.config.server}/slots`);
+            if (!res.ok) return null;
+            const data = await res.json();
+            return Array.isArray(data) ? data : null;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    /**
+     * Slot affinity: bind this session to a server slot for the life of the browser tab so
+     * the server's per-slot KV cache (cache_prompt) is reused across requests.
+     * Returns a slot id (>= 0) or -1 (let the server pick, e.g. LRU).
+     */
+    async getOrCreateSlot(session) {
+        const key = `cadence_llamacpp_slot_${this.getSlotKey(session)}`;
+        try {
+            const slots = await this._fetchSlots();
+            if (!slots) return -1; // /slots unavailable (e.g. --slots disabled) -> server default
+
+            let slot = parseInt(sessionStorage.getItem(key), 10);
+            if (slot >= 0) {
+                const found = slots.find(s => s.id === slot);
+                // Keep affinity even if the slot is busy: the server defers the task
+                // until the slot is free. Only re-acquire if the slot no longer exists
+                // (server restart / slot count change).
+                if (found) return slot;
+            }
+            const idle = slots.filter(s => !s.is_processing).map(s => s.id).sort((a, b) => a - b);
+            if (idle.length === 0) return -1; // all busy -> let server LRU-pick (may defer)
+            const acquired = idle[0];
+            try { sessionStorage.setItem(key, String(acquired)); } catch (e) { /* private mode etc. */ }
+            return acquired;
+        } catch (e) {
+            console.warn("[Llama.cpp] Slot affinity failed, using server default:", e.message);
+            return -1;
         }
     }
 
@@ -382,6 +430,14 @@ class LlamaCpp extends AI {
             const currentTokens = this.estimateTokens(messages);
             if (onContextRatioUpdate) {
                 onContextRatioUpdate(currentTokens / this.MAX_CONTEXT_TOKENS);
+            }
+
+            // Slot affinity: bind this session to a server slot so its KV cache is reused.
+            if (this.config.slotAffinity !== false) {
+                const slot = await this.getOrCreateSlot(session);
+                if (slot >= 0) {
+                    requestBody.id_slot = slot;
+                }
             }
 
             this.abortController = new AbortController();

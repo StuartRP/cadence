@@ -1470,7 +1470,8 @@ ui-editor-holder .artifacts-accordion-container .ace_editor,
     gap: 8px;
 }
 
-.accordion-header button.edit-btn {
+.accordion-header button.edit-btn,
+.accordion-header button.clear-btn {
     display: flex;
     align-items: center;
     gap: 4px;
@@ -1482,6 +1483,12 @@ ui-editor-holder .artifacts-accordion-container .ace_editor,
     border: 1px solid var(--border-primary);
     background: var(--bg-primary);
     color: var(--text-secondary);
+}
+
+.accordion-header button.edit-btn:hover,
+.accordion-header button.clear-btn:hover {
+    background: var(--bg-secondary);
+    color: var(--text-primary);
 }
 
 .accordion-header .expand-arrow {
@@ -1510,6 +1517,37 @@ ui-editor-holder .artifacts-accordion-container .ace_editor,
     align-items: flex-start;
     gap: 12px;
     margin-right: 0;
+}
+
+/* Number input rows: input first, then label/description */
+.artifacts-accordion-container .number-input-row {
+    align-items: center;
+    gap: 12px;
+}
+
+.artifacts-accordion-container .number-input-row .setting-meta {
+    flex: 1;
+}
+
+.artifacts-accordion-container .setting-number-input {
+    width: 65px;
+    padding: 4px 8px;
+    border-radius: var(--borderRadius);
+    border: 1px solid var(--border-primary);
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    font-size: 12.5px;
+    outline: none;
+    transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.artifacts-accordion-container .setting-number-input:hover {
+    border-color: var(--theme);
+}
+
+.artifacts-accordion-container .setting-number-input:focus {
+    border-color: var(--theme);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--theme) 25%, transparent);
 }
 
 .artifacts-accordion-container .setting-meta {

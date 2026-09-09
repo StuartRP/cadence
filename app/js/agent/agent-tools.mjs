@@ -16,6 +16,12 @@ class AgentTools {
         this.editBuffer = {}; // Tracks { [resolvedPath]: { markerIds: [] } }
         this.syntaxErrors = {}; // Tracks pending syntax errors: { [resolvedPath]: errorString }
         this.fileFailureCounts = {}; // Tracks consecutive edit failures per [resolvedPath]
+
+        // LRU Cache for web_fetch: max 20 queries OR max 5MB of content
+        this.webFetchCache = new Map(); // normalizedUrl -> { content: string, size: number, timestamp: number }
+        this.webFetchCacheTotalSize = 0;
+        this.maxWebFetchCacheEntries = 20;
+        this.maxWebFetchCacheSizeBytes = 5 * 1024 * 1024; // 5MB
     }
 
     _getEffectiveWorkspaceFolders(sourceId = null) {
@@ -337,68 +343,214 @@ Snippet: ${r.snippet}`).join('\n\n');
         }
     }
 
-    async webFetch(url) {
+    _getCachedWebFetch(url) {
+        if (!this.webFetchCache.has(url)) {
+            return null;
+        }
+        const entry = this.webFetchCache.get(url);
+        // Refresh LRU order (delete and re-add moves to most recently used)
+        this.webFetchCache.delete(url);
+        entry.timestamp = Date.now();
+        this.webFetchCache.set(url, entry);
+        return entry.content;
+    }
+
+    _setCachedWebFetch(url, content) {
+        if (typeof content !== 'string') return;
+        const size = new TextEncoder().encode(content).length;
+
+        // If this URL was already in cache, remove its old size first
+        if (this.webFetchCache.has(url)) {
+            const old = this.webFetchCache.get(url);
+            this.webFetchCacheTotalSize -= old.size;
+            this.webFetchCache.delete(url);
+        }
+
+        // If a single entry exceeds the entire 5MB cache limit, do not cache it
+        if (size > this.maxWebFetchCacheSizeBytes) {
+            return;
+        }
+
+        // Evict LRU entries until adding this entry fits within limits (max 10 entries OR max 5MB total size)
+        while (
+            this.webFetchCache.size >= this.maxWebFetchCacheEntries ||
+            (this.webFetchCacheTotalSize + size) > this.maxWebFetchCacheSizeBytes
+        ) {
+            const oldestKey = this.webFetchCache.keys().next().value;
+            if (!oldestKey) break;
+            const oldestEntry = this.webFetchCache.get(oldestKey);
+            this.webFetchCacheTotalSize -= oldestEntry.size;
+            this.webFetchCache.delete(oldestKey);
+        }
+
+        this.webFetchCache.set(url, {
+            content,
+            size,
+            timestamp: Date.now()
+        });
+        this.webFetchCacheTotalSize += size;
+    }
+
+    _extractWebContent(raw, url = "") {
+        if (!raw) return "";
+
+        const isRawCodeUrl = /\/raw\/|raw\.githubusercontent\.com|gist\.githubusercontent\.com/i.test(url) ||
+            /\.(js|jsx|ts|tsx|py|go|rs|c|cpp|h|hpp|java|rb|php|cs|swift|kt|sh|bash|json|ya?ml|toml|txt|md|sql|env)$/i.test(url.split('?')[0]);
+
+        const hasHtmlStructure = /<!DOCTYPE\s+html|<html[\s>]|<body[\s>]/i.test(raw);
+
+        if (isRawCodeUrl || !hasHtmlStructure) {
+            return raw;
+        }
+
         try {
-            if (!url) return "Error: URL is empty.";
-            if (this.conduit.isConnected) {
-                const result = await this.conduit.wsWebGet(url);
-                if (result.error) throw new Error(result.error);
-                const html = result.data;
-                
-                const doc = new DOMParser().parseFromString(html, 'text/html');
-                const elementsToRemove = doc.querySelectorAll('script, style, head, nav, footer, iframe, noscript');
-                elementsToRemove.forEach(el => el.remove());
-                let text = doc.body ? doc.body.innerText || doc.body.textContent : "";
-                text = text.replace(/\s+/g, ' ').trim();
+            const doc = new DOMParser().parseFromString(raw, 'text/html');
+            const elementsToRemove = doc.querySelectorAll('script, style, head, nav, footer, iframe, noscript');
+            elementsToRemove.forEach(el => el.remove());
+            let text = doc.body ? (doc.body.innerText || doc.body.textContent || "") : "";
+            text = text.replace(/[ \t]+/g, ' ').replace(/\r\n/g, '\n').replace(/\n\s*\n\s*\n+/g, '\n\n').trim();
+            return text || raw;
+        } catch (e) {
+            return raw;
+        }
+    }
 
-                if (!text) return "The page contains no readable text content.";
+    async webFetch(url, options = {}) {
+        try {
+            if (!url || typeof url !== 'string' || !url.trim()) {
+                return "Error: URL is empty.";
+            }
 
-                const maxLength = 6000;
-                let truncated = text;
-                if (text.length > maxLength) {
-                    truncated = text.substring(0, maxLength) + "... [Content Truncated]";
+            const normalizedUrl = url.trim();
+            const noSummary = !!(options.no_summary ?? options.noSummary);
+            const startLine = options.startLine ?? options.start_line;
+            const lineCount = options.lineCount ?? options.line_count;
+            const endLine = options.endLine ?? options.end_line;
+            const grepQuery = options.grep ?? options.search ?? options.query;
+
+            let fullContent = this._getCachedWebFetch(normalizedUrl);
+
+            if (fullContent === null) {
+                if (!this.conduit.isConnected) {
+                    return "Error: Conduit not connected.";
                 }
 
-                const activeAi = window.ui?.aiManager?.ai;
-                if (activeAi && activeAi.isConfigured()) {
-                    const prompt = `Please summarize or extract the key information from the following webpage content. Focus on details relevant to code, API usage, libraries, or programming information if present.
---- Webpage Content ---
-${truncated}`;
-                    const systemPrompt = "You are a helpful assistant. Clean up and summarize the web content provided, keeping it concise and factual.";
-                    try {
-                        const summary = await new Promise((resolve, reject) => {
-                            const oldSystem = activeAi.config.system;
-                            activeAi.config.system = systemPrompt;
-                            const oldAgentMode = window.ui?.aiManager?.agentMode;
-                            if (window.ui?.aiManager) window.ui.aiManager.agentMode = false;
+                const result = await this.conduit.wsWebGet(normalizedUrl);
+                if (result.error) throw new Error(result.error);
+                const raw = result.data || "";
 
-                            activeAi.generate(prompt, {
-                                onDone: (res) => {
-                                    activeAi.config.system = oldSystem;
-                                    if (window.ui?.aiManager) window.ui.aiManager.agentMode = oldAgentMode;
-                                    resolve(res);
-                                },
-                                onError: (err) => {
-                                    activeAi.config.system = oldSystem;
-                                    if (window.ui?.aiManager) window.ui.aiManager.agentMode = oldAgentMode;
-                                    reject(err);
-                                }
-                            }).catch(err => {
-                                activeAi.config.system = oldSystem;
-                                if (window.ui?.aiManager) window.ui.aiManager.agentMode = oldAgentMode;
-                                reject(err);
-                            });
-                        });
-                        return summary;
-                    } catch (err) {
-                        console.error("Failed to summarize webpage using active model connection, returning raw text:", err);
+                fullContent = this._extractWebContent(raw, normalizedUrl);
+                if (!fullContent) {
+                    return "The page contains no readable text content.";
+                }
+
+                this._setCachedWebFetch(normalizedUrl, fullContent);
+            }
+
+            // If grep query is provided, search within lines and return matching lines with context
+            if (grepQuery && typeof grepQuery === 'string' && grepQuery.trim()) {
+                const lines = fullContent.split(/\r?\n/);
+                const matches = [];
+                const lowerQuery = grepQuery.trim().toLowerCase();
+
+                for (let i = 0; i < lines.length; i++) {
+                    if (lines[i].toLowerCase().includes(lowerQuery)) {
+                        matches.push(i);
                     }
                 }
 
-                return truncated;
-            } else {
-                return "Error: Conduit not connected.";
+                if (matches.length === 0) {
+                    return `[No matches found in ${normalizedUrl} for grep query: "${grepQuery}"]`;
+                }
+
+                let output = `Found ${matches.length} matches for "${grepQuery}" in ${normalizedUrl}:\n\n`;
+                const limit = 20;
+                const displayMatches = matches.slice(0, limit);
+
+                for (let i = 0; i < displayMatches.length; i++) {
+                    const lineIndex = displayMatches[i];
+                    output += `Match ${i + 1} (Line ${lineIndex + 1}):\n`;
+                    const startContext = Math.max(0, lineIndex - 2);
+                    const endContext = Math.min(lines.length - 1, lineIndex + 2);
+                    for (let j = startContext; j <= endContext; j++) {
+                        const prefix = j === lineIndex ? ">" : " ";
+                        output += `Line ${j + 1}: ${prefix}  ${lines[j]}\n`;
+                    }
+                    output += `\n`;
+                }
+
+                if (matches.length > limit) {
+                    output += `[Warning: ${matches.length - limit} additional matches omitted. Use startLine/lineCount to inspect specific regions.]`;
+                }
+
+                return output.trim();
             }
+
+            // If line range is specified, slice by lines (1-indexed) matching readFile behavior
+            if (startLine !== undefined || lineCount !== undefined || endLine !== undefined) {
+                const lines = fullContent.split(/\r?\n/);
+                const start = startLine !== undefined ? Math.max(1, parseInt(startLine, 10)) - 1 : 0;
+                let count;
+                if (lineCount !== undefined && lineCount !== null) {
+                    count = Math.max(0, parseInt(lineCount, 10));
+                } else if (endLine !== undefined && endLine !== null) {
+                    const e = parseInt(endLine, 10);
+                    count = !isNaN(e) ? Math.max(0, e - start) : lines.length;
+                } else {
+                    count = lines.length;
+                }
+                return lines.slice(start, start + count).join('\n');
+            }
+
+            // If no_summary requested, return full content directly
+            if (noSummary) {
+                return fullContent;
+            }
+
+            // Otherwise summarize via LLM if available
+            const maxLength = 6000;
+            let truncated = fullContent;
+            if (fullContent.length > maxLength) {
+                truncated = fullContent.substring(0, maxLength) + "... [Content Truncated]";
+            }
+
+            const activeAi = window.ui?.aiManager?.ai;
+            if (activeAi && activeAi.isConfigured()) {
+                const prompt = `Please summarize or extract the key information from the following webpage content. Focus on details relevant to code, API usage, libraries, or programming information if present.
+--- Webpage Content ---
+${truncated}`;
+                const systemPrompt = "You are a helpful assistant. Clean up and summarize the web content provided, keeping it concise and factual.";
+                try {
+                    const summary = await new Promise((resolve, reject) => {
+                        const oldSystem = activeAi.config.system;
+                        activeAi.config.system = systemPrompt;
+                        const oldAgentMode = window.ui?.aiManager?.agentMode;
+                        if (window.ui?.aiManager) window.ui.aiManager.agentMode = false;
+
+                        activeAi.generate(prompt, {
+                            onDone: (res) => {
+                                activeAi.config.system = oldSystem;
+                                if (window.ui?.aiManager) window.ui.aiManager.agentMode = oldAgentMode;
+                                resolve(res);
+                            },
+                            onError: (err) => {
+                                activeAi.config.system = oldSystem;
+                                if (window.ui?.aiManager) window.ui.aiManager.agentMode = oldAgentMode;
+                                reject(err);
+                            }
+                        }).catch(err => {
+                            activeAi.config.system = oldSystem;
+                            if (window.ui?.aiManager) window.ui.aiManager.agentMode = oldAgentMode;
+                            reject(err);
+                        });
+                    });
+                    return summary;
+                } catch (err) {
+                    console.error("Failed to summarize webpage using active model connection, returning raw text:", err);
+                }
+            }
+
+            return truncated;
         } catch (error) {
             return `Error fetching webpage: ${error.message}`;
         }
@@ -1364,11 +1516,10 @@ Snippet: ${r.content || r.snippet || ""}`;
                 lastEndCol = applied.endColIndex;
             }
 
-            const proposedContent = currentContent;
-            const startLineIndex = firstStartLine;
-            const startColIndex = firstStartCol;
-            const endLineIndex = lastEndLine;
-            const endColIndex = lastEndCol;
+            let proposedContent = currentContent;
+            if (originalContent.includes("\r\n") && !proposedContent.includes("\r\n")) {
+                proposedContent = proposedContent.replace(/\n/g, "\r\n");
+            }
 
             // Pre-Save Syntax Validation
             const syntaxCheck = await syntaxValidator.validate(resolvedPath, proposedContent);
@@ -1424,10 +1575,17 @@ Snippet: ${r.content || r.snippet || ""}`;
                 }
             }
 
-            // 2. Perform the edit on Ace session using the aligned range
-            const Range = window.ace.require("ace/range").Range;
-            const rangeToReplace = new Range(startLineIndex, startColIndex, endLineIndex, endColIndex);
-            session.replace(rangeToReplace, replacementString ?? "");
+            // 2. Perform the edit on Ace session by updating the full document with proposedContent
+            const doc = session.getDocument();
+            const lastRow = doc.getLength() - 1;
+            const lastCol = doc.getLine(lastRow).length;
+            const Range = (window.ace.require ? window.ace.require("ace/range").Range : null) || window.ace.Range;
+            const fullRange = new Range(0, 0, lastRow, lastCol);
+            session.replace(fullRange, proposedContent);
+
+            if (firstStartLine >= 0 && targetTab.config.editor?.gotoLine) {
+                targetTab.config.editor.gotoLine(firstStartLine + 1, firstStartCol);
+            }
 
             if (isForgivenessMode) {
                 // 3. Save to disk immediately only if syntax is valid; otherwise defer save to memory
@@ -1457,10 +1615,11 @@ Snippet: ${r.content || r.snippet || ""}`;
 
             if (syntaxCheck.valid) {
                 delete this.fileFailureCounts[resolvedPath];
+                const editCountMsg = editList.length > 1 ? ` (${editList.length} edits applied)` : "";
                 if (isForgivenessMode) {
-                    return `Successfully edited ${path}.`;
+                    return `Successfully edited ${path}${editCountMsg}.`;
                 } else {
-                    return `Successfully edited ${path} in memory (Permission Mode). The tab has switched to the side-by-side Diff view for your review. Click 'Apply Changes' at the top to save to disk or 'Discard' / rollback anytime.`;
+                    return `Successfully edited ${path}${editCountMsg} in memory (Permission Mode). The tab has switched to the side-by-side Diff view for your review. Click 'Apply Changes' at the top to save to disk or 'Discard' / rollback anytime.`;
                 }
             } else {
                 this.fileFailureCounts[resolvedPath] = (this.fileFailureCounts[resolvedPath] || 0) + 1;
@@ -2510,7 +2669,7 @@ Snippet: ${r.content || r.snippet || ""}`;
             case 'research':
                 return await this.research(args.query);
             case 'web_fetch':
-                return await this.webFetch(args.url);
+                return await this.webFetch(args.url, args);
             case 'read_file':
                 return await this.readFile(args.path, args.startLine, args.lineCount, false, sourceId);
             case 'read_file_outline':
@@ -2706,6 +2865,65 @@ Snippet: ${r.content || r.snippet || ""}`;
             }
             case 'checkpoint':
                 return await this.checkpoint(args.name, sourceId);
+            case 'scratchpad_write': {
+                const targetSessionId = sourceId || window.ui?.aiManager?.activeSessionId;
+                const aiManager = window.ui?.aiManager;
+                const session = (targetSessionId && aiManager?.runningSessions?.get(targetSessionId)?.instance?.session)
+                    || (targetSessionId === aiManager?.activeSessionId ? aiManager?.activeSession : null);
+
+                if (!session) {
+                    throw new Error("No active session found to update scratchpad.");
+                }
+
+                const mode = (args.mode || "replace").toLowerCase();
+                const newContent = (args.content !== undefined ? args.content : (args.notes || "")).toString();
+
+                let finalContent = "";
+                if (mode === "append") {
+                    const currentContent = (session.scratchpad || "").trim();
+                    if (currentContent && newContent.trim()) {
+                        finalContent = `${currentContent}\n\n${newContent.trim()}`;
+                    } else if (newContent.trim()) {
+                        finalContent = newContent.trim();
+                    } else {
+                        finalContent = currentContent;
+                    }
+                } else {
+                    finalContent = newContent.trim();
+                }
+
+                const byteSize = new TextEncoder().encode(finalContent).length;
+                if (byteSize > 4096) {
+                    return `Error: Scratchpad content exceeds 4KB limit (${byteSize} bytes / 4096 bytes max). Please keep your notes concise.`;
+                }
+
+                session.scratchpad = finalContent;
+                delete session.scratchpadTokenCount;
+                session.lastModified = Date.now();
+                await workspaceClient.setSession(session.id, session);
+                aiManager?._updateAgentProgressPanel?.();
+
+                const actionVerb = mode === "append" ? "appended to" : "updated";
+                return `Scratchpad ${actionVerb} (${byteSize} bytes). Notes are active and evergreen in context.`;
+            }
+            case 'scratchpad_clear': {
+                const targetSessionId = sourceId || window.ui?.aiManager?.activeSessionId;
+                const aiManager = window.ui?.aiManager;
+                const session = (targetSessionId && aiManager?.runningSessions?.get(targetSessionId)?.instance?.session)
+                    || (targetSessionId === aiManager?.activeSessionId ? aiManager?.activeSession : null);
+
+                if (!session) {
+                    throw new Error("No active session found to clear scratchpad.");
+                }
+
+                delete session.scratchpad;
+                delete session.scratchpadTokenCount;
+                session.lastModified = Date.now();
+                await workspaceClient.setSession(session.id, session);
+                aiManager?._updateAgentProgressPanel?.();
+
+                return "Scratchpad cleared.";
+            }
             case 'rollback_file':
                 return await this.rollbackFile(args.path, args.target || "cycle_start", sourceId);
             case 'rollback_cycle':

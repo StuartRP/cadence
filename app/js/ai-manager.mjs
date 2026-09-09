@@ -91,11 +91,14 @@ class AIManager {
 			defaultAutoMilestones: localStorage.getItem("defaultAutoMilestones") !== "false",
 			defaultAutoRollbackOnFailures: localStorage.getItem("defaultAutoRollbackOnFailures") === "true",
 			defaultAutoRollbackThreshold: parseInt(localStorage.getItem("defaultAutoRollbackThreshold") || "3", 10),
+			enableGlowAnimation: localStorage.getItem("aiEnableGlowAnimation") !== "false",
 		};
 		// NEW: Session TabBar properties
 		this.sessionTabBar = null;
 		this.newSessionButton = null;
 		this.settingsButton = null; // NEW: Reference for settings button
+		this.glowAnimationButton = null;
+		this.glowAnimationEnabled = this.config.enableGlowAnimation;
 
 		this.saveWorkspaceTimeout = null; // For debouncing workspace saves from _dispatchContextUpdate
 		this.agentMode = false; // NEW: Toggle between standard chat and agentic tool loop
@@ -510,6 +513,8 @@ class AIManager {
 					this.sessionsManager.renameCurrentSession();
 				} else if (action === "copy") {
 					this.sessionsManager.copySession(sessionId);
+				} else if (action === "terminal") {
+					this._openTerminalForSession(sessionId);
 				} else if (action === "archive") {
 					this.sessionsManager.closeSessionTab(sessionId, tab);
 				} else if (action === "delete") {
@@ -548,6 +553,13 @@ class AIManager {
 		this.condensedViewButton.title = "Toggle Condensed / Detailed View (Shows current & previous turn only)";
 		this.condensedViewButton.classList.add("condensed-view-button");
 		this.condensedViewButton.onclick = () => this.toggleCondensedView();
+
+		this.glowAnimationButton = new Button("");
+		this.glowAnimationButton.icon = this.glowAnimationEnabled ? "blur_on" : "blur_off";
+		this.glowAnimationButton.title = this.glowAnimationEnabled ? "Disable Glowing Blob Animation" : "Enable Glowing Blob Animation";
+		this.glowAnimationButton.classList.add("glow-animation-button");
+		this.glowAnimationButton.classList.toggle("active", this.glowAnimationEnabled);
+		this.glowAnimationButton.onclick = () => this.toggleGlowAnimation();
 
 		this.sessionTabBar.append(this.historyButton, this.newSessionButton)
 
@@ -958,6 +970,9 @@ class AIManager {
 	_createUndulatingGlow() {
 		const container = document.createElement('div');
 		container.classList.add('undulating-glow-container');
+		if (!this.glowAnimationEnabled) {
+			container.classList.add('glow-disabled');
+		}
 
 		const canvas = document.createElement('div');
 		canvas.classList.add('undulating-glow-canvas');
@@ -978,6 +993,8 @@ class AIManager {
 		if (targetId) {
 			this.glowingSessions.add(targetId);
 		}
+
+		if (!this.glowAnimationEnabled) return;
 
 		if (this.isSessionViewed(targetId)) {
 			if (this.undulatingGlow) {
@@ -1012,7 +1029,7 @@ class AIManager {
 
 	_updateGlowForViewedSession() {
 		const viewedSessionId = this.activeSession?.activeSubAgentSessionId || this.activeSessionId;
-		if (viewedSessionId && this.glowingSessions.has(viewedSessionId)) {
+		if (this.glowAnimationEnabled && viewedSessionId && this.glowingSessions.has(viewedSessionId)) {
 			if (this.undulatingGlow) {
 				this.undulatingGlow.classList.add('active');
 			}
@@ -1097,6 +1114,7 @@ class AIManager {
 		buttonContainer.append(this.thinkingBudgetSelect);
 		buttonContainer.append(this.condensedViewButton); // Add condensed vs detailed toggle
 		buttonContainer.append(this.rawViewButton); // Add raw view button
+		buttonContainer.append(this.glowAnimationButton); // Add glow animation toggle
 		buttonContainer.append(this.settingsButton);
 		this.stopButton = new Button("Stop");
 		this.stopButton.setIcon("stop");
@@ -1376,7 +1394,9 @@ class AIManager {
 	}
 
 	get _isProcessing() {
-		return this.activeSessionId ? this.runningSessions.has(this.activeSessionId) : false;
+		return this.activeSessionId
+			? (this.runningSessions.has(this.activeSessionId) || !!this.sessionsManager?.externalRunningSessions?.has(this.activeSessionId))
+			: false;
 	}
 
 	set _isProcessing(value) {
@@ -1392,9 +1412,11 @@ class AIManager {
 				this.runningSessions.set(sessionId, { type, controller, session: session || (this.activeSessionId === sessionId ? this.activeSession : null) });
 			}
 			this._updateTabStatus(sessionId, "running");
+			this.sessionsManager?._broadcast('session_processing_start', { sessionId, type });
 		} else {
 			this.runningSessions.delete(sessionId);
 			this._updateTabStatus(sessionId, "completed");
+			this.sessionsManager?._broadcast('session_processing_stop', { sessionId });
 		}
 		this._setButtonsDisabledState(this._isProcessing);
 	}
@@ -1505,7 +1527,14 @@ class AIManager {
 		});
 
 		if (!processedPrompt) return;
-		const userMessage = { role: "user", type: "user", content: processedPrompt, timestamp: Date.now(), id: crypto.randomUUID() };
+		const userMessage = {
+			role: "user",
+			type: "user",
+			content: processedPrompt,
+			timestamp: Date.now(),
+			id: crypto.randomUUID(),
+			tokenCount: connection?.estimateTokens ? connection.estimateTokens(processedPrompt) : Math.ceil(processedPrompt.length / 3.2)
+		};
 		session.messages.push(userMessage);
 		session.lastModified = Date.now();
 		await workspaceClient.setSession(sessionId, session);
@@ -1969,6 +1998,41 @@ class AIManager {
 		this.historyManager.render();
 	}
 
+	setGlowAnimationEnabled(enabled, showToast = false) {
+		this.glowAnimationEnabled = !!enabled;
+		this.config.enableGlowAnimation = this.glowAnimationEnabled;
+		localStorage.setItem("aiEnableGlowAnimation", this.glowAnimationEnabled ? "true" : "false");
+
+		if (this.glowAnimationButton) {
+			this.glowAnimationButton.icon = this.glowAnimationEnabled ? "blur_on" : "blur_off";
+			this.glowAnimationButton.title = this.glowAnimationEnabled ? "Disable Glowing Blob Animation" : "Enable Glowing Blob Animation";
+			this.glowAnimationButton.classList.toggle("active", this.glowAnimationEnabled);
+		}
+
+		if (this.undulatingGlow) {
+			this.undulatingGlow.classList.toggle('glow-disabled', !this.glowAnimationEnabled);
+		}
+
+		if (this.glowAnimationEnabled) {
+			this._updateGlowForViewedSession();
+		} else {
+			if (this.undulatingGlow) {
+				this.undulatingGlow.classList.remove('active');
+			}
+			if (this.conversationArea) {
+				this.conversationArea.classList.remove('glow-active');
+			}
+		}
+
+		if (showToast && window.modal?.toast) {
+			window.modal.toast(this.glowAnimationEnabled ? "Glowing blob animation enabled" : "Glowing blob animation disabled");
+		}
+	}
+
+	toggleGlowAnimation() {
+		this.setGlowAnimationEnabled(!this.glowAnimationEnabled, true);
+	}
+
 	// --- Session Management Delegation ---
 	get allSessionMetadata() { return this.sessionsManager.allSessionMetadata; }
 	set allSessionMetadata(val) { this.sessionsManager.allSessionMetadata = val; }
@@ -2002,6 +2066,38 @@ class AIManager {
 
 	async switchSession(sessionId) {
 		return this.sessionsManager.switchSession(sessionId);
+	}
+
+	/**
+	 * Opens a new terminal at the root of the given AI session.
+	 * Uses the session's first pinned root if it has any, otherwise the
+	 * workspace's default (first) root folder.
+	 * @param {string} sessionId - The AI session ID to open a terminal for.
+	 */
+	async _openTerminalForSession(sessionId) {
+		const session = sessionId === this.sessionsManager.activeSessionId
+			? this.sessionsManager.activeSession
+			: await workspaceClient.getSession(sessionId);
+
+		// Resolve target directory: first pinned root, else default workspace root
+		let dir = "";
+		const pinnedRoot = session?.pinnedRoots?.[0];
+		if (pinnedRoot && typeof pinnedRoot === "string") {
+			dir = pinnedRoot;
+		} else {
+			const rawFolder = window.workspace?.folders?.[0];
+			dir = typeof rawFolder === 'string' ? rawFolder : (rawFolder?.path || rawFolder?.name || "");
+		}
+
+		const tm = window.terminalManager;
+		if (!tm) return;
+
+		// Open the terminal drawer so the new terminal is visible
+		if (window.ui?.toggleDrawer) window.ui.toggleDrawer(true);
+
+		// Request a terminal in this directory (consumed by the next connection)
+		tm._pendingDir = dir;
+		tm.createNewTerminalSession();
 	}
 
 	async deleteSession(sessionId, tab) {
@@ -2043,6 +2139,16 @@ class AIManager {
 
 		const shouldPassSessionData = this.activeSession && type !== "session_deleted" && type !== "session_closed";
 
+		const isSync = !!this.sessionsManager?._isSyncingFromBroadcast;
+
+		// Synchronize activeSession.lastModified into allSessionMetadata before dispatching
+		if (this.activeSession && this.allSessionMetadata) {
+			const activeMeta = this.allSessionMetadata.find(s => s.id === this.activeSession.id);
+			if (activeMeta && this.activeSession.lastModified) {
+				activeMeta.lastModified = Math.max(activeMeta.lastModified || 0, this.activeSession.lastModified);
+			}
+		}
+
 		const eventDetail = {
 			aiProvider: this.aiProvider,
 			runMode: "chat", // Always chat mode now
@@ -2050,6 +2156,7 @@ class AIManager {
 			estimatedWindow: estimatedWindow,
 			maxContextTokens: maxContextTokens,
 			type: type,
+			isSync: isSync,
 			// NEW: Pass the metadata for workspace and a deep copy of the full active session for IndexedDB save
 			aiSessionsMetadata: {
 				activeSessionId: this.activeSessionId,
@@ -2065,15 +2172,40 @@ class AIManager {
 
 		this.panel.dispatchEvent(new CustomEvent("context-update", { detail: eventDetail }))
 
-		if (this.sessionsManager?._broadcast && this.activeSession && type !== "session_deleted" && type !== "session_closed" && type !== "tokens_updated") {
+		// If this update was triggered by an incoming cross-tab sync, do not echo back or trigger background saves
+		if (isSync) {
+			return;
+		}
+
+		const nonBroadcastTypes = [
+			"session_switched",
+			"session_messages_loaded",
+			"tokens_updated",
+			"session_deleted",
+			"session_closed",
+			"session_renamed",
+			"ai_connection_switched",
+			"settings_change_external",
+			"settings_change",
+			"settings_save_error",
+			"settings_save_success",
+			"file_mode_changed",
+			"summarize_error",
+			"edit_prompt"
+		];
+
+		if (this.sessionsManager?._broadcast && this.activeSession && !nonBroadcastTypes.includes(type)) {
 			this.sessionsManager._broadcast('session_updated', {
 				sessionId: this.activeSession.id,
 				lastModified: this.activeSession.lastModified,
-				name: this.activeSession.name
+				revision: this.activeSession.revision,
+				name: this.activeSession.name,
+				type: type,
+				messageCount: this.activeSession.messages ? this.activeSession.messages.length : 0
 			});
 		}
 
-		if (this.activeSession && type !== "session_deleted" && type !== "session_closed" && type !== "tokens_updated") {
+		if (this.activeSession && !nonBroadcastTypes.includes(type)) {
 			this.historyManager.updateMessageTokenCounts(this.activeSession).catch(err => {
 				console.warn("[AIManager] Failed to update background token counts:", err);
 			});
@@ -2387,6 +2519,7 @@ class AIManager {
 				content: item.content,
 				timestamp: Date.now(),
 				mode: targetAgentMode ? 'outline' : 'full',
+				tokenCount: targetAI?.estimateTokens ? targetAI.estimateTokens(item.content) : Math.ceil((item.content || '').length / 3.2)
 			};
 			
 			if (targetAgentMode) {
@@ -2408,7 +2541,14 @@ class AIManager {
 		let userMessage = null;
 		let userMessageElement = null; // To hold the DOM element of the user's prompt
 		if (processedPrompt) {
-			userMessage = { role: "user", type: "user", content: processedPrompt, timestamp: Date.now(), id: crypto.randomUUID() };
+			userMessage = {
+				role: "user",
+				type: "user",
+				content: processedPrompt,
+				timestamp: Date.now(),
+				id: crypto.randomUUID(),
+				tokenCount: targetAI?.estimateTokens ? targetAI.estimateTokens(processedPrompt) : Math.ceil(processedPrompt.length / 3.2)
+			};
 			targetSession.messages.push(userMessage);
 			if (this.activeSessionId === targetSessionId) {
 				userMessageElement = this.historyManager.appendMessageElement(userMessage);
@@ -2838,21 +2978,42 @@ class AIManager {
 
 			let detailHtml = "";
 			if (toolCall.name === "edit_file") {
+				const args = toolCall.arguments || {};
+				let diffSections = "";
+				if (Array.isArray(args.edits) && args.edits.length > 0) {
+					diffSections = args.edits.map((ed, i) => `
+						<div class="diff-edit-item" style="margin-bottom: 8px;">
+							${args.edits.length > 1 ? `<div style="font-size: 11px; font-weight: bold; margin-bottom: 4px; opacity: 0.8;">Edit ${i + 1} of ${args.edits.length}:</div>` : ''}
+							<div class="diff-section remove">
+								<span class="diff-label">Remove:</span>
+								<pre><code>${this._escapeHtml(ed.search || ed.searchString || "")}</code></pre>
+							</div>
+							<div class="diff-section add">
+								<span class="diff-label">Add:</span>
+								<pre><code>${this._escapeHtml(ed.replace !== undefined ? ed.replace : (ed.replacementString ?? ""))}</code></pre>
+							</div>
+						</div>
+					`).join("");
+				} else {
+					diffSections = `
+						<div class="diff-section remove">
+							<span class="diff-label">Remove:</span>
+							<pre><code>${this._escapeHtml(args.search || args.searchString || "")}</code></pre>
+						</div>
+						<div class="diff-section add">
+							<span class="diff-label">Add:</span>
+							<pre><code>${this._escapeHtml(args.replace !== undefined ? args.replace : (args.replacementString ?? ""))}</code></pre>
+						</div>
+					`;
+				}
 				detailHtml = `
 					<div class="approval-header">
 						<ui-icon>edit</ui-icon>
 						<span>Approve File Edit</span>
 					</div>
-					<div class="approval-path">File: <code>${toolCall.arguments.path}</code></div>
+					<div class="approval-path">File: <code>${args.path}</code></div>
 					<div class="approval-diff-preview">
-						<div class="diff-section remove">
-							<span class="diff-label">Remove:</span>
-							<pre><code>${this._escapeHtml(toolCall.arguments.search)}</code></pre>
-						</div>
-						<div class="diff-section add">
-							<span class="diff-label">Add:</span>
-							<pre><code>${this._escapeHtml(toolCall.arguments.replace)}</code></pre>
-						</div>
+						${diffSections}
 					</div>
 				`;
 			} else if (toolCall.name === "create_file") {
@@ -3272,6 +3433,14 @@ Output only the XML. Do not use any tools.`;
 				};
 			});
 		}
+		if (callbacks.usageMetadata) {
+			const candTokens = callbacks.usageMetadata.candidatesTokenCount || 0;
+			const thoughtTokens = callbacks.usageMetadata.thoughtsTokenCount || 0;
+			const totalOutput = candTokens + thoughtTokens;
+			if (totalOutput > 0) {
+				modelMessage.tokenCount = totalOutput;
+			}
+		}
 
 		const targetSession = sessionObj || this.activeSession;
 		const existingIndex = targetSession.messages.findIndex(m => m.id === modelMessage.id);
@@ -3660,6 +3829,14 @@ Output only the XML. Do not use any tools.`;
 							...(sig ? { thoughtSignature: sig } : {})
 						};
 					});
+				}
+				if (callbacks.usageMetadata) {
+					const candTokens = callbacks.usageMetadata.candidatesTokenCount || 0;
+					const thoughtTokens = callbacks.usageMetadata.thoughtsTokenCount || 0;
+					const totalOutput = candTokens + thoughtTokens;
+					if (totalOutput > 0) {
+						modelMessage.tokenCount = totalOutput;
+					}
 				}
 				this.activeSession.messages.push(modelMessage);
 				this.historyManager.addInteractionToLastUserMessage(userMessage);

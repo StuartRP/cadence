@@ -2269,6 +2269,7 @@ class AIManagerHistory {
 	 */
 	async tokenizeMessage(message, sessionObj = null) {
 		if (!message || !this.ai || !this.ai.isConfigured()) return;
+		if (typeof message.tokenCount === 'number') return;
 		if (typeof this.ai.tokenize !== 'function') return;
 		if (message.type === 'system_message' || message.type === 'error' || message.role === 'temp_ai_response') {
 			message.tokenCount = 0;
@@ -2361,6 +2362,7 @@ class AIManagerHistory {
 			}
 			delete session.implementationPlanTokenCount;
 			delete session.taskListTokenCount;
+			delete session.scratchpadTokenCount;
 			session.tokenizedForProvider = this.ai.providerId;
 			updated = true;
 		}
@@ -2422,6 +2424,18 @@ class AIManagerHistory {
 			}
 		} else if (!session.taskList && session.taskListTokenCount !== undefined) {
 			delete session.taskListTokenCount;
+			updated = true;
+		}
+
+		if (session.scratchpad && typeof session.scratchpadTokenCount !== 'number') {
+			const textToTokenize = `EVERGREEN SCRATCHPAD NOTES:\n${session.scratchpad}`;
+			const count = await this.ai.tokenize(textToTokenize);
+			if (typeof count === 'number') {
+				session.scratchpadTokenCount = count;
+				updated = true;
+			}
+		} else if (!session.scratchpad && session.scratchpadTokenCount !== undefined) {
+			delete session.scratchpadTokenCount;
 			updated = true;
 		}
 
@@ -2801,7 +2815,8 @@ class AIManagerHistory {
 								role: "user",
 								type: "cycle_summary",
 								content: `<compacted_cycle title="${cycleTitle}">\n${msg.content}\n</compacted_cycle>`,
-								timestamp: msg.timestamp
+								timestamp: msg.timestamp,
+								...(typeof msg.tokenCount === 'number' ? { tokenCount: msg.tokenCount } : {})
 							});
 						} else {
 							// Older summary: remove raw turns from history, and inject the condensed milestones block once at the head
@@ -2843,6 +2858,13 @@ class AIManagerHistory {
 					role: "system",
 					content: `EVERGREEN TASK LIST:\n${targetSession.taskList}`,
 					tokenCount: targetSession.taskListTokenCount
+				}]);
+			}
+			if (targetSession?.scratchpad) {
+				extraTokens += this.ai.estimateTokens([{
+					role: "system",
+					content: `EVERGREEN SCRATCHPAD NOTES:\n${targetSession.scratchpad}`,
+					tokenCount: targetSession.scratchpadTokenCount
 				}]);
 			}
 		}
@@ -3163,6 +3185,13 @@ class AIManagerHistory {
 					tokenCount: targetSession.taskListTokenCount
 				});
 			}
+			if (targetSession?.scratchpad) {
+				contextForAI.push({
+					role: "system",
+					content: `EVERGREEN SCRATCHPAD NOTES:\n${targetSession.scratchpad}`,
+					tokenCount: targetSession.scratchpadTokenCount
+				});
+			}
 		}
 
 
@@ -3180,6 +3209,7 @@ class AIManagerHistory {
 				contextForAI.push({
 					role: "user",
 					content: `--- Outline: ${msg.id} ---\n\`\`\`${msg.language}\n${msg.outline}\n\`\`\``,
+					...(typeof msg.tokenCount === 'number' ? { tokenCount: msg.tokenCount } : {})
 				});
 			}
 		});
@@ -3191,6 +3221,7 @@ class AIManagerHistory {
 					contextForAI.push({
 						role: "user",
 						content: `--- File: ${msg.id} ---\n\`\`\`${msg.language}\n${msg.content}\n\`\`\``,
+						...(typeof msg.tokenCount === 'number' ? { tokenCount: msg.tokenCount } : {})
 					});
 				}
 			} else {
@@ -3246,7 +3277,8 @@ class AIManagerHistory {
 
 				const contextItem = {
 					role: msg.role,
-					content: content
+					content: content,
+					...(typeof msg.tokenCount === 'number' ? { tokenCount: msg.tokenCount } : {})
 				};
 				
 				const msgSig = msg.thoughtSignature || msg.thought_signature;

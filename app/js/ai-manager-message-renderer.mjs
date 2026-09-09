@@ -613,7 +613,30 @@ export default class AIManagerMessageRenderer {
                 if (args.url) {
                     const rawUrl = args.url.trim();
                     const displayUrl = rawUrl.length > 55 ? rawUrl.substring(0, 55) + "..." : rawUrl;
-                    label = `<code>${toolName}:</code> <a href="${this._escapeHtml(rawUrl)}" target="_blank" rel="noopener noreferrer" class="tool-call-link" title="${this._escapeHtml(rawUrl)}">${this._escapeHtml(displayUrl)}</a>`;
+                    let urlSuffix = "";
+                    const grep = args.grep ?? args.search ?? args.query;
+                    if (grep && typeof grep === 'string' && grep.trim()) {
+                        const shortGrep = grep.trim().length > 25 ? grep.trim().substring(0, 25) + "..." : grep.trim();
+                        urlSuffix += ` grep:"${shortGrep}"`;
+                    } else {
+                        const start = parseInt(args.startLine ?? args.startline ?? args.start_line ?? args.start, 10);
+                        const count = parseInt(args.lineCount ?? args.linecount ?? args.line_count ?? args.count, 10);
+                        const end = parseInt(args.endLine ?? args.endline ?? args.end_line ?? args.end, 10);
+                        if (!isNaN(start) && !isNaN(count)) {
+                            const calculatedEnd = start + count - 1;
+                            urlSuffix += calculatedEnd > start ? ` #L${start}-${calculatedEnd}` : ` #L${start}`;
+                        } else if (!isNaN(start) && !isNaN(end)) {
+                            urlSuffix += ` #L${start}-${end}`;
+                        } else if (!isNaN(start)) {
+                            urlSuffix += ` #L${start}`;
+                        } else if (!isNaN(count) && count > 0) {
+                            urlSuffix += ` #L1-${count}`;
+                        }
+                    }
+                    if (args.no_summary || args.noSummary) {
+                        urlSuffix += ` (raw)`;
+                    }
+                    label = `<code>${toolName}:</code> <a href="${this._escapeHtml(rawUrl)}" target="_blank" rel="noopener noreferrer" class="tool-call-link" title="${this._escapeHtml(rawUrl)}">${this._escapeHtml(displayUrl)}</a>${urlSuffix ? ` <span class="tool-call-range" style="opacity: 0.8; font-family: monospace;">${this._escapeHtml(urlSuffix)}</span>` : ""}`;
                 } else if (args.path) {
                     if (fileActions.includes(toolName)) {
                         const shortFile = args.path.split('/').pop() || args.path;
@@ -669,9 +692,13 @@ export default class AIManagerMessageRenderer {
                     label = `<code>${toolName}:</code> <span class="tool-call-query"><code>$ ${this._escapeHtml(truncatedCmd)}</code></span>${cwdInfo}`;
                 } else if (args.query) {
                     label = `<code>${toolName}:</code> <span class="tool-call-query">"${this._escapeHtml(args.query)}"</span>`;
-                } else if (args.question) {
-                    const truncated = args.question.length > 60 ? args.question.substring(0, 60) + "..." : args.question;
-                    label = `<code>${toolName}:</code> <span class="tool-call-query">"${this._escapeHtml(truncated)}"</span>`;
+                } else if (toolName === "scratchpad_write") {
+                    const mode = (args.mode || "replace").toLowerCase();
+                    const contentStr = (args.content || args.notes || "").trim();
+                    const snippet = contentStr.length > 40 ? contentStr.substring(0, 40) + "..." : contentStr;
+                    label = `<code>${toolName} (${mode}):</code> <span class="tool-call-query">"${this._escapeHtml(snippet)}"</span>`;
+                } else if (toolName === "scratchpad_clear") {
+                    label = `<code>${toolName}</code>`;
                 }
 
                 let expanderHtml = "";
@@ -823,7 +850,30 @@ export default class AIManagerMessageRenderer {
         if (args.url) {
             const rawUrl = (args.url || "").trim();
             const displayUrl = rawUrl.length > 55 ? rawUrl.substring(0, 55) + "..." : rawUrl;
-            label = `<code>${toolName}:</code> <a href="${this._escapeHtml(rawUrl)}" target="_blank" rel="noopener noreferrer" class="tool-call-link" title="${this._escapeHtml(rawUrl)}">${this._escapeHtml(displayUrl)}</a>`;
+            let urlSuffix = "";
+            const grep = args.grep ?? args.search ?? args.query;
+            if (grep && typeof grep === 'string' && grep.trim()) {
+                const shortGrep = grep.trim().length > 25 ? grep.trim().substring(0, 25) + "..." : grep.trim();
+                urlSuffix += ` grep:"${shortGrep}"`;
+            } else {
+                const start = parseInt(args.startLine ?? args.startline ?? args.start_line ?? args.start, 10);
+                const count = parseInt(args.lineCount ?? args.linecount ?? args.line_count ?? args.count, 10);
+                const end = parseInt(args.endLine ?? args.endline ?? args.end_line ?? args.end, 10);
+                if (!isNaN(start) && !isNaN(count)) {
+                    const calculatedEnd = start + count - 1;
+                    urlSuffix += calculatedEnd > start ? ` #L${start}-${calculatedEnd}` : ` #L${start}`;
+                } else if (!isNaN(start) && !isNaN(end)) {
+                    urlSuffix += ` #L${start}-${end}`;
+                } else if (!isNaN(start)) {
+                    urlSuffix += ` #L${start}`;
+                } else if (!isNaN(count) && count > 0) {
+                    urlSuffix += ` #L1-${count}`;
+                }
+            }
+            if (args.no_summary || args.noSummary) {
+                urlSuffix += ` (raw)`;
+            }
+            label = `<code>${toolName}:</code> <a href="${this._escapeHtml(rawUrl)}" target="_blank" rel="noopener noreferrer" class="tool-call-link" title="${this._escapeHtml(rawUrl)}">${this._escapeHtml(displayUrl)}</a>${urlSuffix ? ` <span class="tool-call-range" style="opacity: 0.8; font-family: monospace;">${this._escapeHtml(urlSuffix)}</span>` : ""}`;
         } else if (args.path) {
             if (fileActions.includes(toolName)) {
                 const shortFile = args.path.split('/').pop() || args.path;
@@ -877,8 +927,13 @@ export default class AIManagerMessageRenderer {
             const cwdVal = args.cwd || args.dir;
             const cwdInfo = cwdVal ? ` <span class="tool-call-cwd" style="opacity:0.8; font-size:0.9em;">(in <code>${this._escapeHtml(cwdVal.split('/').filter(Boolean).pop() || cwdVal)}</code>)</span>` : '';
             label = `<code>${toolName}:</code> <span class="tool-call-query"><code>$ ${this._escapeHtml(truncatedCmd)}</code></span>${cwdInfo}`;
-        } else if (args.query) {
-            label = `<code>${toolName}:</code> <span class="tool-call-query">"${this._escapeHtml(args.query)}"</span>`;
+        } else if (toolName === "scratchpad_write") {
+            const mode = (args.mode || "replace").toLowerCase();
+            const contentStr = (args.content || args.notes || "").trim();
+            const snippet = contentStr.length > 40 ? contentStr.substring(0, 40) + "..." : contentStr;
+            label = `<code>${toolName} (${mode}):</code> <span class="tool-call-query">"${this._escapeHtml(snippet)}"</span>`;
+        } else if (toolName === "scratchpad_clear") {
+            label = `<code>${toolName}</code>`;
         } else if (args.question) {
             const truncated = args.question.length > 60 ? args.question.substring(0, 60) + "..." : args.question;
             label = `<code>${toolName}:</code> <span class="tool-call-query">"${this._escapeHtml(truncated)}"</span>`;
@@ -1022,7 +1077,30 @@ export default class AIManagerMessageRenderer {
             if (!args) return "";
             if (args.url) {
                 const rawUrl = (args.url || '').trim();
-                return rawUrl.length > 30 ? rawUrl.substring(0, 30) + "..." : rawUrl;
+                let text = rawUrl.length > 30 ? rawUrl.substring(0, 30) + "..." : rawUrl;
+                const grep = args.grep ?? args.search ?? args.query;
+                if (grep && typeof grep === 'string' && grep.trim()) {
+                    const shortGrep = grep.trim().length > 15 ? grep.trim().substring(0, 15) + "..." : grep.trim();
+                    text += ` grep:"${shortGrep}"`;
+                } else {
+                    const start = parseInt(args.startLine ?? args.startline ?? args.start_line ?? args.start, 10);
+                    const count = parseInt(args.lineCount ?? args.linecount ?? args.line_count ?? args.count, 10);
+                    const end = parseInt(args.endLine ?? args.endline ?? args.end_line ?? args.end, 10);
+                    if (!isNaN(start) && !isNaN(count)) {
+                        const calculatedEnd = start + count - 1;
+                        text += calculatedEnd > start ? ` #L${start}-${calculatedEnd}` : ` #L${start}`;
+                    } else if (!isNaN(start) && !isNaN(end)) {
+                        text += ` #L${start}-${end}`;
+                    } else if (!isNaN(start)) {
+                        text += ` #L${start}`;
+                    } else if (!isNaN(count) && count > 0) {
+                        text += ` #L1-${count}`;
+                    }
+                }
+                if (args.no_summary || args.noSummary) {
+                    text += ` (raw)`;
+                }
+                return text;
             } else if (args.command) {
                 const shortCmd = args.command.length > 30 ? args.command.substring(0, 30) + "..." : args.command;
                 const cwdVal = args.cwd || args.dir;
@@ -1067,7 +1145,13 @@ export default class AIManagerMessageRenderer {
                     const contentBytes = (new TextEncoder().encode(args.content || "")).length;
                     details += ` (+${contentLines}, ${this.formatByteSize(contentBytes, true)})`;
                 }
-                return details;
+            } else if (toolName === "scratchpad_write") {
+                const mode = (args.mode || "replace").toLowerCase();
+                const contentStr = (args.content || args.notes || "").trim();
+                const snippet = contentStr.length > 25 ? contentStr.substring(0, 25) + "..." : contentStr;
+                return `(${mode}) "${this._escapeHtml(snippet)}"`;
+            } else if (toolName === "scratchpad_clear") {
+                return "";
             } else if (args.query) {
                 const shortQuery = args.query.length > 25 ? args.query.substring(0, 25) + "..." : args.query;
                 return `"${this._escapeHtml(shortQuery)}"`;
