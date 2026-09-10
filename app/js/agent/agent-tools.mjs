@@ -24,15 +24,27 @@ class AgentTools {
         this.maxWebFetchCacheSizeBytes = 5 * 1024 * 1024; // 5MB
     }
 
+    _resolveSession(sourceId = null) {
+        try {
+            const aiManager = window.ui?.aiManager;
+            const targetSessionId = sourceId || aiManager?.activeSessionId;
+            const running = targetSessionId ? aiManager?.runningSessions?.get(targetSessionId) : null;
+            const session = running?.instance?.session || running?.session
+                || (targetSessionId === aiManager?.activeSessionId ? aiManager?.activeSession : null)
+                || aiManager?.activeSession;
+            return session || null;
+        } catch (e) {
+            return null;
+        }
+    }
+
     _getEffectiveWorkspaceFolders(sourceId = null) {
         const allFolders = window.workspace?.folders || [];
         if (allFolders.length === 0) return [];
 
         try {
             const aiManager = window.ui?.aiManager;
-            const targetSessionId = sourceId || aiManager?.activeSessionId;
-            const session = (targetSessionId && aiManager?.runningSessions?.get(targetSessionId)?.instance?.session)
-                || (targetSessionId === aiManager?.activeSessionId ? aiManager?.activeSession : null);
+            const session = this._resolveSession(sourceId);
 
             if (aiManager?.getEffectiveWorkspaceFolders) {
                 return aiManager.getEffectiveWorkspaceFolders(session);
@@ -524,23 +536,18 @@ ${truncated}`;
                     const summary = await new Promise((resolve, reject) => {
                         const oldSystem = activeAi.config.system;
                         activeAi.config.system = systemPrompt;
-                        const oldAgentMode = window.ui?.aiManager?.agentMode;
-                        if (window.ui?.aiManager) window.ui.aiManager.agentMode = false;
 
                         activeAi.generate(prompt, {
                             onDone: (res) => {
                                 activeAi.config.system = oldSystem;
-                                if (window.ui?.aiManager) window.ui.aiManager.agentMode = oldAgentMode;
                                 resolve(res);
                             },
                             onError: (err) => {
                                 activeAi.config.system = oldSystem;
-                                if (window.ui?.aiManager) window.ui.aiManager.agentMode = oldAgentMode;
                                 reject(err);
                             }
                         }).catch(err => {
                             activeAi.config.system = oldSystem;
-                            if (window.ui?.aiManager) window.ui.aiManager.agentMode = oldAgentMode;
                             reject(err);
                         });
                     });
@@ -2209,8 +2216,8 @@ Snippet: ${r.content || r.snippet || ""}`;
                 }
             }
 
-            const isForgivenessMode = window.ui?.aiManager?.forgivenessMode === true;
-            const activeSession = window.ui?.aiManager?.activeSession;
+            const activeSession = this._resolveSession(sourceId);
+            const isForgivenessMode = (activeSession?.forgivenessMode ?? window.ui?.aiManager?.forgivenessMode) === true;
             const actId = sourceId || activeSession?.id || "default";
 
             // Pre-Save Syntax Validation
@@ -2612,7 +2619,9 @@ Snippet: ${r.content || r.snippet || ""}`;
      * If a file has been resolved to valid syntax, saves to disk in Forgiveness Mode.
      * @returns {Promise<string|null>} Error message if any file has syntax errors, or null if all clean.
      */
-    async _checkPendingSyntaxErrors() {
+    async _checkPendingSyntaxErrors(sourceId = null) {
+        const session = this._resolveSession(sourceId);
+        const isForgivenessMode = (session?.forgivenessMode ?? window.ui?.aiManager?.forgivenessMode) === true;
         const pathsWithErrors = Object.keys(this.syntaxErrors);
         for (const resolvedPath of pathsWithErrors) {
             const tab = this._findOpenTab(resolvedPath);
@@ -2622,7 +2631,7 @@ Snippet: ${r.content || r.snippet || ""}`;
                 if (check.valid) {
                     delete this.syntaxErrors[resolvedPath];
                     // In forgiveness mode, commit to disk now that syntax is valid
-                    if (window.ui?.aiManager?.forgivenessMode === true && tab && window.saveFileTab) {
+                    if (isForgivenessMode && tab && window.saveFileTab) {
                         await window.saveFileTab(tab);
                         tab.config.session.baseValue = tab.config.session.getValue();
                     }
@@ -2645,7 +2654,9 @@ Snippet: ${r.content || r.snippet || ""}`;
      */
      async execute(name, args = {}, sourceId = null) {
         // Prevent file editing/creation tools in planning mode
-        if (window.ui?.aiManager?.planningMode && (name === 'create_file' || name === 'edit_file' || name === 'edit_remove_lines' || name === 'refactor_copy_lines')) {
+        const targetSession = this._resolveSession(sourceId);
+        const isPlanning = targetSession ? (targetSession.planningMode ?? window.ui?.aiManager?.planningMode) : window.ui?.aiManager?.planningMode;
+        if (isPlanning && (name === 'create_file' || name === 'edit_file' || name === 'edit_remove_lines' || name === 'refactor_copy_lines')) {
             return `Tool Error: Tool '${name}' is not allowed while in planning mode.`;
         }
 
@@ -2800,7 +2811,7 @@ Snippet: ${r.content || r.snippet || ""}`;
                 return "Task list updated.";
             }
             case 'complete_task': {
-                const syntaxIssue = await this._checkPendingSyntaxErrors();
+                const syntaxIssue = await this._checkPendingSyntaxErrors(sourceId);
                 if (syntaxIssue) {
                     return `Cannot mark task complete: ${syntaxIssue}\nPlease resolve the syntax error before completing the task.`;
                 }
@@ -2846,7 +2857,7 @@ Snippet: ${r.content || r.snippet || ""}`;
             case 'create_sub_agent':
                 return await this.createSubAgent(args, sourceId);
             case 'sub_agent_complete': {
-                const syntaxIssue = await this._checkPendingSyntaxErrors();
+                const syntaxIssue = await this._checkPendingSyntaxErrors(sourceId);
                 if (syntaxIssue) {
                     return `Cannot complete sub-agent execution: ${syntaxIssue}\nPlease resolve the syntax error before finishing.`;
                 }
@@ -2857,7 +2868,7 @@ Snippet: ${r.content || r.snippet || ""}`;
             case 'query_parent':
                 return await this.queryParent(args, sourceId);
             case 'done': {
-                const syntaxIssue = await this._checkPendingSyntaxErrors();
+                const syntaxIssue = await this._checkPendingSyntaxErrors(sourceId);
                 if (syntaxIssue) {
                     return `Cannot finish agent execution: ${syntaxIssue}\nPlease resolve the syntax error before completing your work.`;
                 }

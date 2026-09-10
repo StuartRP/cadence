@@ -984,27 +984,6 @@ class Gemini extends AI {
                 }
 
                 requestBody.contents = [{ role: "user", parts: [{ text: userPromptContent }] }];
-                
-                if (window.ui?.aiManager?.agentMode) {
-                    const isPlanning = window.ui?.aiManager?.planningMode === true;
-                    const filteredTools = cadenceTools.filter(t => !(isPlanning && (t.name === "create_file" || t.name === "edit_file")));
-                    const geminiTools = filteredTools.map(t => {
-                        const properties = {};
-                        for (const [k, v] of Object.entries(t.parameters.properties)) {
-                            properties[k] = { ...v, type: v.type.toUpperCase() };
-                        }
-                        return {
-                            name: t.name,
-                            description: t.description,
-                            parameters: {
-                                type: t.parameters.type.toUpperCase(),
-                                properties,
-                                required: t.parameters.required
-                            }
-                        };
-                    });
-                    requestBody.tools = [{ functionDeclarations: geminiTools }];
-                }
 
                 requestBody.safetySettings = [
                     { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
@@ -1208,11 +1187,12 @@ class Gemini extends AI {
 
                 requestBody.contents = this._toGeminiContents(processedMessages);
                 
-                if (!(session && session.noTools) && (window.ui?.aiManager?.agentMode || (session && session.parentId))) {
+                const isAgent = session ? (session.agentMode ?? window.ui?.aiManager?.agentMode) : window.ui?.aiManager?.agentMode;
+                if (!(session && session.noTools) && (isAgent || (session && session.parentId))) {
                     const isSubAgent = !!(session && session.parentId);
                     let filteredTools = getToolsForSession(isSubAgent, this.supportsJSONTools);
                     if (!isSubAgent) {
-                        const isPlanning = window.ui?.aiManager?.planningMode === true;
+                        const isPlanning = session ? (session.planningMode ?? window.ui?.aiManager?.planningMode === true) : (window.ui?.aiManager?.planningMode === true);
                         filteredTools = filteredTools.filter(t => {
                             if (isPlanning && (t.name === "create_file" || t.name === "edit_file")) return false;
                             if (session && session.allowSubAgents === false && t.name === "create_sub_agent") return false;

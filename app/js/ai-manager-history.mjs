@@ -2765,6 +2765,7 @@ class AIManagerHistory {
 
 	prepareMessagesForAI(sessionObj = null) {
 		const targetSession = sessionObj || this.manager.activeSession;
+		const isAgentMode = targetSession ? (targetSession.agentMode ?? this.manager.agentMode) : this.manager.agentMode;
 		// Create a deep enough copy of messages to avoid modifying the original history.
 		let messages = (targetSession?.messages || []).map(msg => ({ ...msg }));
 
@@ -2845,7 +2846,7 @@ class AIManagerHistory {
 
 		// Calculate extra tokens of evergreen plan, task list, directives, task state, and system prompt
 		let extraTokens = 0;
-		if (this.manager.agentMode) {
+		if (isAgentMode) {
 			if (targetSession?.implementationPlan) {
 				extraTokens += this.ai.estimateTokens([{
 					role: "system",
@@ -2876,11 +2877,11 @@ class AIManagerHistory {
 			}]);
 		}
 		
-		if (this.manager.agentMode && chatHistory.length > 0) {
+		if (isAgentMode && chatHistory.length > 0) {
 			const hasPlan = !!targetSession?.implementationPlan;
 			const hasTasks = !!targetSession?.taskList;
 			const hasAcceptedPlan = targetSession?.messages?.some(m => m.planStatus === "accepted") || false;
-			const planningMode = targetSession ? (targetSession.planningMode ?? this.manager.planningMode) : this.manager.planningMode;
+			const planningMode = targetSession ? (targetSession.planningMode ?? (this.manager.config?.defaultPlanningMode ?? true)) : (this.manager.config?.defaultPlanningMode ?? true);
 			
 			let hasCompletedAllTasks = false;
 			if (hasTasks && targetSession.taskList) {
@@ -2972,7 +2973,7 @@ class AIManagerHistory {
 
 		// NEW: If Agent Mode is turned OFF, strip out agent-specific tags and filter tool responses 
 		// to prevent chat history prompt contamination/few-shot leakage.
-		if (!this.manager.agentMode) {
+		if (!isAgentMode) {
 			chatHistory = chatHistory.filter(msg => msg.type !== "tool_response");
 			chatHistory = chatHistory.map(msg => {
 				if (msg.content) {
@@ -2998,11 +2999,11 @@ class AIManagerHistory {
 		}
 
 		// Partition chat history into file contexts and dialogue history to preserve attachments
-		const fileContexts = this.manager.agentMode ? [] : chatHistory.filter(msg => msg.type === "file_context");
+		const fileContexts = isAgentMode ? [] : chatHistory.filter(msg => msg.type === "file_context");
 		let dialogueHistory = chatHistory.filter(msg => msg.type !== "file_context");
 
 		// Advanced Dialogue Pruning in Agent Mode (Dynamic sliding window with cache-friendly head tracking)
-		if (this.manager.agentMode) {
+		if (isAgentMode) {
 			const maxContextTokens = this.ai?.MAX_CONTEXT_TOKENS || 8192;
 			const minPct = targetSession?.contextPrefillMinPercentage ?? (this.manager.config?.contextPrefillMinPercentage || 40);
 			const maxPct = targetSession?.contextPrefillMaxPercentage ?? (this.manager.config?.contextPrefillMaxPercentage || 80);
@@ -3170,7 +3171,7 @@ class AIManagerHistory {
 		const contextForAI = [];
 
 		// NEW: Prepend evergreen plan and task checklist at the top of AI context in Agent Mode
-		if (this.manager.agentMode) {
+		if (isAgentMode) {
 			if (targetSession?.implementationPlan) {
 				contextForAI.push({
 					role: "system",
@@ -3303,11 +3304,11 @@ class AIManagerHistory {
 			}
 		});
 
-		if (this.manager.agentMode && contextForAI.length > 0) {
+		if (isAgentMode && contextForAI.length > 0) {
 			const hasPlan = !!targetSession?.implementationPlan;
 			const hasTasks = !!targetSession?.taskList;
 			const hasAcceptedPlan = targetSession?.messages?.some(m => m.planStatus === "accepted") || false;
-			const planningMode = targetSession ? (targetSession.planningMode ?? this.manager.planningMode) : this.manager.planningMode;
+			const planningMode = targetSession ? (targetSession.planningMode ?? (this.manager.config?.defaultPlanningMode ?? true)) : (this.manager.config?.defaultPlanningMode ?? true);
 			
 			let hasCompletedAllTasks = false;
 			if (hasTasks && targetSession.taskList) {

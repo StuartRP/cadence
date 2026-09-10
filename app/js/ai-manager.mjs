@@ -2443,8 +2443,8 @@ class AIManager {
 		const targetSession = this.activeSession;
 		const targetSessionId = this.activeSessionId;
 		const targetAI = this.ai;
-		const targetAgentMode = this.agentMode;
-		const targetForgivenessMode = this.forgivenessMode;
+		const targetAgentMode = targetSession ? (targetSession.agentMode ?? this.agentMode) : this.agentMode;
+		const targetForgivenessMode = targetSession ? (targetSession.forgivenessMode ?? this.forgivenessMode) : this.forgivenessMode;
 
 		// Clear min-height from all previous response blocks to let them reflow naturally.
 		this.conversationArea.querySelectorAll('.response-block').forEach(block => {
@@ -2971,9 +2971,10 @@ class AIManager {
 		});
 	}
 
-	_validateToolArguments(toolCall) {
+	_validateToolArguments(toolCall, session = null) {
 		if (!toolCall) return null;
-		if (this.planningMode && (toolCall.name === "create_file" || toolCall.name === "edit_file")) {
+		const isPlanning = session ? (session.planningMode ?? this.planningMode) : this.planningMode;
+		if (isPlanning && (toolCall.name === "create_file" || toolCall.name === "edit_file")) {
 			return `Tool Error: Tool "${toolCall.name}" is not allowed while in planning mode.`;
 		}
 		if (toolCall.name === "edit_file") {

@@ -536,9 +536,10 @@ export class Agent {
 				}
 
 				const regex = /<[^>]*>/g;
+				const sessionAgentMode = session ? (session.agentMode ?? aiManager.agentMode) : aiManager.agentMode;
 				
-				if (toolCalls.length === 0 || !aiManager.agentMode) {
-					if (!aiManager.agentMode) {
+				if (toolCalls.length === 0 || !sessionAgentMode) {
+					if (!sessionAgentMode) {
 						aiManager.setSessionProcessing(session.id, false);
 						if (aiManager.isSessionViewed(session.id)) {
 							aiManager._dispatchContextUpdate("append_model");
@@ -790,7 +791,7 @@ export class Agent {
 					let approved = true;
 
 					// Validate required arguments before executing or showing approvals
-					const validationError = aiManager._validateToolArguments(toolCall);
+					const validationError = aiManager._validateToolArguments(toolCall, session);
 					if (validationError) {
 						accumulatedResponses.push(`[Tool Response: ${toolCall.name}]\n\n${validationError}`);
 						continue;
@@ -798,7 +799,8 @@ export class Agent {
 
 					// Identify if tool is destructive
 					const isDestructive = ["create_file"].includes(toolCall.name);
-					if (isDestructive && !aiManager.forgivenessMode) {
+					const isForgiveness = (session?.forgivenessMode ?? aiManager.forgivenessMode) === true;
+					if (isDestructive && !isForgiveness) {
 						approved = await aiManager._showAgentApprovalCard(toolCall);
 					}
 
