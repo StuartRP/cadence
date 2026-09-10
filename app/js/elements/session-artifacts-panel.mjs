@@ -169,6 +169,7 @@ export class SessionArtifactsPanel extends Block {
         this.agentModeCheckbox = createToggleRow("accordion-agent-mode", "Agent Mode", "Allow Cadence to automatically read, write, and manage workspace files.", "agent-toggle-wrapper");
         this.planningModeCheckbox = createToggleRow("accordion-planning-mode", "Planning Mode", "Focus Cadence on generating structured implementation plans before applying edits.", "planning-toggle-wrapper");
         this.forgivenessModeCheckbox = createToggleRow("accordion-forgiveness-mode", "Forgiveness Mode", "Commit edits immediately to disk with robust single-click rollback safety.", "agent-toggle-wrapper");
+        this.openEditsForReviewCheckbox = createToggleRow("accordion-open-edits-for-review", "Open Edits for Review", "Open files in editor for diff review (optional in Forgiveness Mode).", "agent-toggle-wrapper");
         this.allowSubAgentsCheckbox = createToggleRow("accordion-allow-sub-agents", "Allow Sub-Agents", "Allow Cadence to spawn sub-agents to solve smaller tasks.", "sub-agents-toggle-wrapper");
         this.allowRunCommandCheckbox = createToggleRow("accordion-allow-run-command", "Allow Terminal Commands", "Allow Cadence to execute terminal shell commands via the run_command tool.", "run-command-toggle-wrapper");
         this.autoMilestonesCheckbox = createToggleRow("accordion-auto-milestones", "Auto-Milestones on 'done'", "Automatically freeze a checkpoint milestone when the agent finishes a cycle.", "auto-milestones-toggle-wrapper");
@@ -249,6 +250,7 @@ export class SessionArtifactsPanel extends Block {
                 window.ui.aiManager.activeSession.forgivenessMode = checked;
                 await workspaceClient.setSession(window.ui.aiManager.activeSession.id, window.ui.aiManager.activeSession);
             }
+            this._updateOpenEditsReviewState(checked, window.ui.aiManager.activeSession?.openEditsForReview);
             if (window.ui) {
                 const leftActive = window.ui.leftTabs?.activeTab;
                 if (leftActive && window.ui.leftHolder?.updateNoticeBar) {
@@ -258,6 +260,15 @@ export class SessionArtifactsPanel extends Block {
                 if (rightActive && window.ui.rightHolder?.updateNoticeBar) {
                     window.ui.rightHolder.updateNoticeBar(rightActive);
                 }
+            }
+        });
+
+        this.openEditsForReviewCheckbox.addEventListener("change", async (e) => {
+            const checked = e.target.checked;
+            window.ui.aiManager.openEditsForReview = checked;
+            if (window.ui.aiManager.activeSession) {
+                window.ui.aiManager.activeSession.openEditsForReview = checked;
+                await workspaceClient.setSession(window.ui.aiManager.activeSession.id, window.ui.aiManager.activeSession);
             }
         });
 
@@ -327,6 +338,22 @@ export class SessionArtifactsPanel extends Block {
                 await workspaceClient.setSession(ui.aiManager.activeSession.id, ui.aiManager.activeSession);
             }
         });
+    }
+
+    _updateOpenEditsReviewState(isForgiveness, sessionOpenEdits) {
+        if (!this.openEditsForReviewCheckbox) return;
+        const row = this.openEditsForReviewCheckbox.closest(".toggle-row");
+        if (!isForgiveness) {
+            this.openEditsForReviewCheckbox.disabled = true;
+            this.openEditsForReviewCheckbox.checked = true;
+            if (row) row.classList.add("disabled-row");
+            this.openEditsForReviewCheckbox.title = "Required in Permission Mode: Edits must be opened in editor for review and saving.";
+        } else {
+            this.openEditsForReviewCheckbox.disabled = false;
+            this.openEditsForReviewCheckbox.checked = sessionOpenEdits ?? (window.ui?.aiManager?.config?.defaultOpenEditsForReview ?? true);
+            if (row) row.classList.remove("disabled-row");
+            this.openEditsForReviewCheckbox.title = "Open Edits for Review: Open modified and newly created files in editor tabs for diff review.";
+        }
     }
 
     _buildPlanAccordion() {
@@ -634,7 +661,9 @@ export class SessionArtifactsPanel extends Block {
         // Update checkbox toggles and numeric inputs
         this.agentModeCheckbox.checked = session.agentMode ?? (ui.aiManager.config?.defaultAgentMode ?? false);
         this.planningModeCheckbox.checked = session.planningMode ?? (ui.aiManager.config?.defaultPlanningMode ?? true);
-        this.forgivenessModeCheckbox.checked = session.forgivenessMode ?? (ui.aiManager.config?.defaultForgivenessMode ?? false);
+        const isForgiveness = session.forgivenessMode ?? (ui.aiManager.config?.defaultForgivenessMode ?? false);
+        this.forgivenessModeCheckbox.checked = isForgiveness;
+        this._updateOpenEditsReviewState(isForgiveness, session.openEditsForReview);
         this.allowSubAgentsCheckbox.checked = session.allowSubAgents !== false;
         this.allowRunCommandCheckbox.checked = session.allowRunCommand !== false;
         this.autoMilestonesCheckbox.checked = session.autoMilestones ?? (ui.aiManager.config?.defaultAutoMilestones !== false);

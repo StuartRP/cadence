@@ -38,6 +38,32 @@ class AgentTools {
         }
     }
 
+    _shouldOpenEditsForReview(sourceId = null) {
+        const activeSession = this._resolveSession(sourceId);
+        const isForgivenessMode = (activeSession?.forgivenessMode ?? window.ui?.aiManager?.forgivenessMode) === true;
+        if (!isForgivenessMode) return true; // Permission Mode requires in-editor review & manual saving
+        return (activeSession?.openEditsForReview ?? window.ui?.aiManager?.openEditsForReview ?? window.ui?.aiManager?.config?.defaultOpenEditsForReview ?? true);
+    }
+
+    async _readDirectFileContent(resolvedPath) {
+        if (!this.conduit.isConnected) {
+            throw new Error(`Conduit not connected to read ${resolvedPath}`);
+        }
+        const result = await this.conduit.wsRead(resolvedPath);
+        if (result.error) throw new Error(result.error);
+        let content = "";
+        if (result.data) {
+            try {
+                content = decodeURIComponent(escape(atob(result.data)));
+            } catch (e) {
+                content = result.data;
+            }
+        } else {
+            content = result.content || "";
+        }
+        return content;
+    }
+
     _getEffectiveWorkspaceFolders(sourceId = null) {
         const allFolders = window.workspace?.folders || [];
         if (allFolders.length === 0) return [];
@@ -1483,23 +1509,36 @@ Snippet: ${r.content || r.snippet || ""}`;
             }
 
             const resolvedPath = this._resolveAndValidatePath(path);
-            
-            // 1. Ensure the file is open in the editor
+
+            const targetSessionId = sourceId || window.ui?.aiManager?.activeSessionId;
+            const aiManager = window.ui?.aiManager;
+            const activeSession = (targetSessionId && aiManager?.runningSessions?.get(targetSessionId)?.instance?.session)
+                || (targetSessionId === aiManager?.activeSessionId ? aiManager?.activeSession : null)
+                || window.ui?.aiManager?.activeSession;
+
+            const isForgivenessMode = (activeSession?.forgivenessMode ?? window.ui?.aiManager?.forgivenessMode) === true;
+            const shouldOpenForReview = !isForgivenessMode || (activeSession?.openEditsForReview ?? window.ui?.aiManager?.openEditsForReview ?? window.ui?.aiManager?.config?.defaultOpenEditsForReview ?? true);
+
+            // 1. Locate open editor tab or read direct from disk if review is not requested
             let targetTab = this._findOpenTab(resolvedPath);
 
-            if (!targetTab) {
+            if (shouldOpenForReview && !targetTab) {
                 if (window.ui?.fileList?.open) {
                     await window.ui.fileList.open(resolvedPath, resolvedPath);
                     targetTab = this._findOpenTab(resolvedPath);
                 }
             }
 
-            if (!targetTab) {
+            if (shouldOpenForReview && !targetTab) {
                 throw new Error(`Failed to open file ${resolvedPath} in the editor.`);
             }
 
-            const session = targetTab.config.session;
-            const originalContent = session.getValue();
+            let originalContent = "";
+            if (targetTab && targetTab.config?.session) {
+                originalContent = targetTab.config.session.getValue();
+            } else {
+                originalContent = await this._readDirectFileContent(resolvedPath);
+            }
 
             let currentContent = originalContent;
             let firstStartLine = -1;
@@ -1536,15 +1575,7 @@ Snippet: ${r.content || r.snippet || ""}`;
                 this.syntaxErrors[resolvedPath] = syntaxCheck.error;
             }
 
-            const targetSessionId = sourceId || window.ui?.aiManager?.activeSessionId;
-            const aiManager = window.ui?.aiManager;
-            const activeSession = (targetSessionId && aiManager?.runningSessions?.get(targetSessionId)?.instance?.session)
-                || (targetSessionId === aiManager?.activeSessionId ? aiManager?.activeSession : null)
-                || window.ui?.aiManager?.activeSession;
-
-            const isForgivenessMode = (activeSession?.forgivenessMode ?? window.ui?.aiManager?.forgivenessMode) === true;
-
-            // 1. Create backup if not already present in the active session for the current milestone
+            // 2. Create backup if not already present in the active session for the current milestone
             let backupId = "";
             const existingBackups = (activeSession?.modifiedFiles && activeSession.modifiedFiles[resolvedPath]) || [];
             const milestoneTs = activeSession?.lastMilestoneTimestamp || activeSession?.createdAt || 0;
@@ -1582,39 +1613,75 @@ Snippet: ${r.content || r.snippet || ""}`;
                 }
             }
 
-            // 2. Perform the edit on Ace session by updating the full document with proposedContent
-            const doc = session.getDocument();
-            const lastRow = doc.getLength() - 1;
-            const lastCol = doc.getLine(lastRow).length;
-            const Range = (window.ace.require ? window.ace.require("ace/range").Range : null) || window.ace.Range;
-            const fullRange = new Range(0, 0, lastRow, lastCol);
-            session.replace(fullRange, proposedContent);
+            // 3. Save to disk and update editor tab
+            // - If shouldOpenForReview is true: always open for review.
+            // - If shouldOpenForReview is false and shouldAutoRollback is true: do NOT open the file (model has retry attempts before auto-rollback).
+            // - If shouldOpenForReview is false and shouldAutoRollback is false: open on validation failure since ultimate failure state is unreachable.
+            const shouldAutoRollback = activeSession?.autoRollbackOnFailures ?? (aiManager?.config?.defaultAutoRollbackOnFailures === true);
+            const shouldOpenTab = shouldOpenForReview || (!shouldAutoRollback && !syntaxCheck.valid);
 
-            if (firstStartLine >= 0 && targetTab.config.editor?.gotoLine) {
-                targetTab.config.editor.gotoLine(firstStartLine + 1, firstStartCol);
-            }
+            if (shouldOpenTab) {
+                // If review is requested or fallback on validation failure without auto-rollback, ensure tab is open in diff view
+                if (!targetTab && window.ui?.fileList?.open) {
+                    await window.ui.fileList.open(resolvedPath, resolvedPath);
+                    targetTab = this._findOpenTab(resolvedPath);
+                }
 
-            if (isForgivenessMode) {
-                // 3. Save to disk immediately only if syntax is valid; otherwise defer save to memory
-                if (syntaxCheck.valid && window.saveFileTab) {
-                    await window.saveFileTab(targetTab);
-                    session.baseValue = session.getValue();
+                if (targetTab && targetTab.config?.session) {
+                    const session = targetTab.config.session;
+                    const doc = session.getDocument();
+                    const lastRow = doc.getLength() - 1;
+                    const lastCol = doc.getLine(lastRow).length;
+                    const Range = (window.ace.require ? window.ace.require("ace/range").Range : null) || window.ace.Range;
+                    const fullRange = new Range(0, 0, lastRow, lastCol);
+                    session.replace(fullRange, proposedContent);
+
+                    if (firstStartLine >= 0 && targetTab.config.editor?.gotoLine) {
+                        targetTab.config.editor.gotoLine(firstStartLine + 1, firstStartCol);
+                    }
+
+                    if (isForgivenessMode) {
+                        // Save to disk immediately only if syntax is valid; otherwise defer save to memory
+                        if (syntaxCheck.valid && window.saveFileTab) {
+                            await window.saveFileTab(targetTab);
+                            session.baseValue = session.getValue();
+                        }
+                    } else {
+                        // Track pending AI edits in active session for Permission Mode
+                        if (activeSession) {
+                            activeSession.pendingEdits = activeSession.pendingEdits || {};
+                            activeSession.pendingEdits[resolvedPath] = true;
+                            await workspaceClient.setSession(activeSession.id, activeSession);
+                        }
+                    }
+
+                    // Set tab to diff view mode automatically with backupId retained for rollback and review
+                    targetTab.config.viewMode = "diff";
+                    targetTab.config.backupId = backupId;
+
+                    // Focus & Redraw
+                    targetTab.click();
                 }
             } else {
-                // Track pending AI edits in active session for Permission Mode
-                if (activeSession) {
-                    activeSession.pendingEdits = activeSession.pendingEdits || {};
-                    activeSession.pendingEdits[resolvedPath] = true;
-                    await workspaceClient.setSession(activeSession.id, activeSession);
+                // Headless edit in Forgiveness Mode (syntax is valid and openEditsForReview is false)
+                const base64Content = btoa(unescape(encodeURIComponent(proposedContent)));
+                const result = await this.conduit.wsWrite(resolvedPath, base64Content);
+                if (result.error) throw new Error(result.error);
+
+                // If file was already open in a tab, update its in-memory Ace buffer without stealing focus or switching to diff
+                if (targetTab && targetTab.config?.session) {
+                    const session = targetTab.config.session;
+                    const doc = session.getDocument();
+                    const lastRow = doc.getLength() - 1;
+                    const lastCol = doc.getLine(lastRow).length;
+                    const Range = (window.ace.require ? window.ace.require("ace/range").Range : null) || window.ace.Range;
+                    const fullRange = new Range(0, 0, lastRow, lastCol);
+                    session.replace(fullRange, proposedContent);
+                    session.baseValue = proposedContent;
+                    targetTab.changed = false;
                 }
             }
 
-            // 4. Set tab to diff view mode automatically with backupId retained for rollback and review
-            targetTab.config.viewMode = "diff";
-            targetTab.config.backupId = backupId;
-
-            // 5. Focus & Redraw
-            targetTab.click();
             if (window.ui?.renderPlanTasksView) {
                 const containers = document.querySelectorAll('.plan-tasks-view');
                 containers.forEach(c => window.ui.renderPlanTasksView(c));
@@ -1624,7 +1691,7 @@ Snippet: ${r.content || r.snippet || ""}`;
                 delete this.fileFailureCounts[resolvedPath];
                 const editCountMsg = editList.length > 1 ? ` (${editList.length} edits applied)` : "";
                 if (isForgivenessMode) {
-                    return `Successfully edited ${path}${editCountMsg}.`;
+                    return `Successfully edited and validated ${path}${editCountMsg}.`;
                 } else {
                     return `Successfully edited ${path}${editCountMsg} in memory (Permission Mode). The tab has switched to the side-by-side Diff view for your review. Click 'Apply Changes' at the top to save to disk or 'Discard' / rollback anytime.`;
                 }
@@ -2217,7 +2284,10 @@ Snippet: ${r.content || r.snippet || ""}`;
             }
 
             const activeSession = this._resolveSession(sourceId);
-            const isForgivenessMode = (activeSession?.forgivenessMode ?? window.ui?.aiManager?.forgivenessMode) === true;
+            const aiManager = window.ui?.aiManager;
+            const isForgivenessMode = (activeSession?.forgivenessMode ?? aiManager?.forgivenessMode) === true;
+            const shouldOpenForReview = !isForgivenessMode || (activeSession?.openEditsForReview ?? aiManager?.openEditsForReview ?? aiManager?.config?.defaultOpenEditsForReview ?? true);
+            const shouldAutoRollback = activeSession?.autoRollbackOnFailures ?? (aiManager?.config?.defaultAutoRollbackOnFailures === true);
             const actId = sourceId || activeSession?.id || "default";
 
             // Pre-Save Syntax Validation
@@ -2228,7 +2298,9 @@ Snippet: ${r.content || r.snippet || ""}`;
                 this.syntaxErrors[resolvedPath] = syntaxCheck.error;
             }
 
-            if (isForgivenessMode && syntaxCheck.valid) {
+            const shouldOpenTab = shouldOpenForReview || (!shouldAutoRollback && !syntaxCheck.valid);
+
+            if (isForgivenessMode && (syntaxCheck.valid || !shouldOpenTab)) {
                 const base64Content = btoa(unescape(encodeURIComponent(content))); // Safe base64 encoding
                 const result = await this.conduit.wsWrite(resolvedPath, base64Content);
                 if (result.error) throw new Error(result.error);
@@ -2252,11 +2324,15 @@ Snippet: ${r.content || r.snippet || ""}`;
                     window.ui.fileList.refreshFolders();
                 }
 
-                if (window.ui?.fileList?.open) {
+                if (shouldOpenTab && window.ui?.fileList?.open) {
                     await window.ui.fileList.open(resolvedPath);
                 }
                 
-                return `Successfully created ${path}.`;
+                if (syntaxCheck.valid) {
+                    return `Successfully created and validated ${path}.`;
+                } else {
+                    return `Successfully created ${path}.\n⚠️ Notice: File currently has syntax errors (${syntaxCheck.error}). Ensure subsequent edits resolve this before completing the task.`;
+                }
             }
 
             // Permission Mode or Deferred Forgiveness Mode: Create empty on disk, open, set content in memory, show diff
@@ -2625,7 +2701,15 @@ Snippet: ${r.content || r.snippet || ""}`;
         const pathsWithErrors = Object.keys(this.syntaxErrors);
         for (const resolvedPath of pathsWithErrors) {
             const tab = this._findOpenTab(resolvedPath);
-            const content = tab?.config?.session?.getValue();
+            let content = tab?.config?.session?.getValue();
+            if (typeof content !== 'string' && this.conduit && this.conduit.isConnected) {
+                try {
+                    const result = await this.conduit.wsRead(resolvedPath);
+                    if (result && result.data) {
+                        content = decodeURIComponent(escape(atob(result.data)));
+                    }
+                } catch (e) {}
+            }
             if (typeof content === 'string') {
                 const check = await syntaxValidator.validate(resolvedPath, content);
                 if (check.valid) {

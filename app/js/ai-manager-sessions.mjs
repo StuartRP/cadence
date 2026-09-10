@@ -245,6 +245,10 @@ class AIManagerSessions {
 			? this.manager.config.defaultForgivenessMode
 			: (localStorage.getItem("aiForgivenessMode") === "true");
 
+		const defaultOpenEdits = (this.manager.config.defaultOpenEditsForReview !== undefined)
+			? this.manager.config.defaultOpenEditsForReview
+			: (localStorage.getItem("defaultOpenEditsForReview") !== "false");
+
 		const defaultSubAgents = (this.manager.config.defaultAllowSubAgents !== undefined)
 			? this.manager.config.defaultAllowSubAgents
 			: (localStorage.getItem("defaultAllowSubAgents") !== "false");
@@ -267,6 +271,7 @@ class AIManagerSessions {
 			agentMode: defaultAgent,
 			planningMode: defaultPlanning,
 			forgivenessMode: defaultForgiveness,
+			openEditsForReview: defaultOpenEdits,
 			connectionId: defaultConnectionId,
 			thinkingLevel: "auto",
 			allowSubAgents: defaultSubAgents,
@@ -468,6 +473,7 @@ class AIManagerSessions {
 		this.manager.agentMode = newSessionData.agentMode ?? (this.manager.config.defaultAgentMode ?? false);
 		this.manager.planningMode = newSessionData.planningMode ?? (this.manager.config.defaultPlanningMode ?? true);
 		this.manager.forgivenessMode = newSessionData.forgivenessMode ?? (this.manager.config.defaultForgivenessMode ?? false);
+		this.manager.openEditsForReview = newSessionData.openEditsForReview ?? (this.manager.config.defaultOpenEditsForReview ?? true);
 		this.manager.allowRunCommand = newSessionData.allowRunCommand ?? (this.manager.config.defaultAllowRunCommand ?? true);
 		this._unsentPromptBuffer = null; // Clear any pending unsent prompt from the previous session
 

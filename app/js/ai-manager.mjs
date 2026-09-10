@@ -85,6 +85,7 @@ class AIManager {
 			defaultAgentMode: localStorage.getItem("defaultAgentMode") === "true",
 			defaultPlanningMode: localStorage.getItem("defaultPlanningMode") !== "false",
 			defaultForgivenessMode: localStorage.getItem("aiForgivenessMode") === "true",
+			defaultOpenEditsForReview: localStorage.getItem("defaultOpenEditsForReview") !== "false",
 			maxSubAgents: parseInt(localStorage.getItem("maxSubAgents") || "3"),
 			defaultAllowSubAgents: localStorage.getItem("defaultAllowSubAgents") !== "false",
 			defaultAllowRunCommand: localStorage.getItem("defaultAllowRunCommand") !== "false",
@@ -106,6 +107,7 @@ class AIManager {
 		this.planningMode = false; // NEW: Toggle planning mode
 		this.planningModeToggle = null;
 		this.forgivenessMode = false; // NEW: Toggle Permission vs Forgiveness mode
+		this.openEditsForReview = true; // Toggle opening files in tabs for review
 		this.allowRunCommand = localStorage.getItem("aiAllowRunCommand") === "true"; // Toggle command tool availability
 		this.rawViewMode = false; // NEW: Tracks alternate expander raw view
 		this.rawViewButton = null;
@@ -774,6 +776,7 @@ class AIManager {
 		// Listen for file focus requests from chips in the conversation area
 		this.chatContainer.addEventListener('file-focus-request', async (e) => {
 			let path = e.detail.path;
+			const targetLine = e.detail.line !== undefined ? parseInt(e.detail.line, 10) : null;
 			try {
 				if (agentTools && typeof agentTools._resolveAndValidatePath === 'function') {
 					path = agentTools._resolveAndValidatePath(path);
@@ -789,16 +792,35 @@ class AIManager {
 			}
 			if (tab) {
 				tab.click();
-				// Wait for the tab switch to complete and focus the editor
-				setTimeout(() => {
-					const editor = window.editors.find(ed => ed.id?.includes(tab.config.session.id));
-					// Fallback: if we can't find it by ID, try to find it by the session's editor
-					if (editor) {
-						editor.focus();
-					} else if (tab.config.session && tab.config.session.editor) {
-						tab.config.session.editor.focus();
+				const getTargetEd = () => {
+					const editor = window.editors?.find(ed => ed.id?.includes(tab.config?.session?.id));
+					return editor || (tab.config?.session && tab.config.session.editor) || tab.config?.editor || window.currentEditor || window.ui?.currentEditor;
+				};
+				const applyLineAndFocus = (ed) => {
+					if (ed) {
+						if (targetLine && !isNaN(targetLine) && typeof ed.gotoLine === 'function') {
+							ed.gotoLine(targetLine, 0, true);
+						}
+						if (typeof ed.focus === 'function') {
+							ed.focus();
+						}
 					}
+				};
+				applyLineAndFocus(getTargetEd());
+				// Wait for the tab switch to complete and ensure focus and line navigation
+				setTimeout(() => {
+					applyLineAndFocus(getTargetEd());
 				}, 100);
+			} else if (targetLine && !isNaN(targetLine)) {
+				const curEd = window.currentEditor || window.ui?.currentEditor;
+				if (curEd) {
+					if (typeof curEd.gotoLine === 'function') {
+						curEd.gotoLine(targetLine, 0, true);
+					}
+					if (typeof curEd.focus === 'function') {
+						curEd.focus();
+					}
+				}
 			}
 		});
 
@@ -4105,6 +4127,15 @@ Output only the XML. Do not use any tools.`;
 		} else {
 			this.config.defaultForgivenessMode = false;
 			this.forgivenessMode = false;
+		}
+
+		const storedOpenEditsForReview = localStorage.getItem("defaultOpenEditsForReview");
+		if (storedOpenEditsForReview !== null) {
+			this.config.defaultOpenEditsForReview = storedOpenEditsForReview !== "false";
+			this.openEditsForReview = storedOpenEditsForReview !== "false";
+		} else {
+			this.config.defaultOpenEditsForReview = true;
+			this.openEditsForReview = true;
 		}
 
 		const storedMaxSubAgents = localStorage.getItem("maxSubAgents");

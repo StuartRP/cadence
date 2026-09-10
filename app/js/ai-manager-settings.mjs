@@ -88,6 +88,7 @@ class AIManagerSettings {
             systemPromptTone: (systemPromptConfig.tone || ["warm", "playful", "cheeky"]).join(", "),
             "ai-provider": aiManager.aiProvider,
             forgivenessMode: aiManager.forgivenessMode,
+            defaultOpenEditsForReview: aiManager.config.defaultOpenEditsForReview ?? true,
         }
         for (const key in providerOptions) {
             values[`${aiManager.aiProvider}-${key}`] = providerOptions[key].value
@@ -98,6 +99,7 @@ class AIManagerSettings {
             { type: "checkbox", id: "use-workspace-settings", label: "Use workspace-specific settings" },
             { type: "checkbox", id: "enableGlowAnimation", label: "Enable Glowing Blob Animation on Chat History" },
             { type: "checkbox", id: "forgivenessMode", label: "Forgiveness Mode (Apply edits immediately, rollback anytime)" },
+            { type: "checkbox", id: "defaultOpenEditsForReview", label: "Open Edits for Review by Default (Forgiveness Mode only)" },
             { type: "checkbox", id: "defaultAgentMode", label: "Default Agent Mode for New Chats" },
             { type: "checkbox", id: "defaultPlanningMode", label: "Default Planning Mode for New Chats" },
             { type: "checkbox", id: "defaultAllowSubAgents", label: "Default Allow Sub-Agents for New Chats" },
@@ -237,6 +239,15 @@ class AIManagerSettings {
         localStorage.setItem("aiForgivenessMode", aiManager.forgivenessMode);
         if (aiManager.activeSession) {
             aiManager.activeSession.forgivenessMode = aiManager.forgivenessMode;
+            await workspaceClient.setSession(aiManager.activeSession.id, aiManager.activeSession);
+        }
+
+        // --- Save Open Edits For Review ---
+        aiManager.config.defaultOpenEditsForReview = !!values.defaultOpenEditsForReview;
+        aiManager.openEditsForReview = !!values.defaultOpenEditsForReview;
+        localStorage.setItem("defaultOpenEditsForReview", aiManager.config.defaultOpenEditsForReview);
+        if (aiManager.activeSession) {
+            aiManager.activeSession.openEditsForReview = aiManager.config.defaultOpenEditsForReview;
             await workspaceClient.setSession(aiManager.activeSession.id, aiManager.activeSession);
         }
 

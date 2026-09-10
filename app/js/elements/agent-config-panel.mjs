@@ -112,7 +112,7 @@ export class AgentConfigPanel extends Block {
 			const input = document.createElement("input");
 			input.type = "checkbox";
 			input.id = id;
-			if (key === "defaultAllowSubAgents" || key === "defaultAllowRunCommand" || key === "defaultPlanningMode" || key === "defaultAutoMilestones") {
+			if (key === "defaultAllowSubAgents" || key === "defaultAllowRunCommand" || key === "defaultPlanningMode" || key === "defaultAutoMilestones" || key === "defaultOpenEditsForReview") {
 				input.checked = localStorage.getItem(key) !== "false";
 			} else {
 				input.checked = localStorage.getItem(key) === "true";
@@ -123,6 +123,10 @@ export class AgentConfigPanel extends Block {
 					if (key === "aiForgivenessMode") {
 						window.ui.aiManager.config.defaultForgivenessMode = input.checked;
 						window.ui.aiManager.forgivenessMode = input.checked;
+					}
+					if (key === "defaultOpenEditsForReview") {
+						window.ui.aiManager.config.defaultOpenEditsForReview = input.checked;
+						window.ui.aiManager.openEditsForReview = input.checked;
 					}
 					if (key === "defaultAgentMode") window.ui.aiManager.config.defaultAgentMode = input.checked;
 					if (key === "defaultPlanningMode") window.ui.aiManager.config.defaultPlanningMode = input.checked;
@@ -157,15 +161,39 @@ export class AgentConfigPanel extends Block {
 			wrapper.appendChild(label);
 			wrapper.appendChild(meta);
 			grid.appendChild(wrapper);
+
+			return { input, wrapper };
 		};
 
 		createToggleRow("default-agent-mode", "Default Agent Mode", "Start new sessions in Agent Mode automatically.", "defaultAgentMode");
 		createToggleRow("default-planning-mode", "Default Planning Mode", "Start new sessions with Planning Mode enabled.", "defaultPlanningMode");
-		createToggleRow("default-forgiveness-mode", "Default Forgiveness Mode", "Commit edits immediately to disk (after validation checks)", "aiForgivenessMode");
+		const forgivenessToggle = createToggleRow("default-forgiveness-mode", "Default Forgiveness Mode", "Commit edits immediately to disk (after validation checks)", "aiForgivenessMode");
+		const openEditsToggle = createToggleRow("default-open-edits-for-review", "Default Open Edits for Review", "Open files in editor for diff review (optional in Forgiveness Mode).", "defaultOpenEditsForReview");
 		createToggleRow("default-allow-sub-agents", "Default Allow Sub-Agents", "Start new sessions with sub-agents allowed.", "defaultAllowSubAgents");
 		createToggleRow("default-allow-run-command", "Default Allow Terminal Commands", "Start new sessions with terminal commands allowed.", "defaultAllowRunCommand");
 		createToggleRow("default-auto-milestones", "Default Auto-Milestones on 'done'", "Automatically freeze a checkpoint milestone when the agent finishes a cycle in new sessions.", "defaultAutoMilestones");
 		createToggleRow("default-auto-rollback-on-failures", "Default Auto-Rollback on Edit Failures", "Automatically roll back a file when consecutive edits fail.", "defaultAutoRollbackOnFailures");
+
+		const updateOpenEditsToggle = (isForgiveness) => {
+			if (!isForgiveness) {
+				openEditsToggle.input.disabled = true;
+				openEditsToggle.input.checked = true;
+				openEditsToggle.wrapper.classList.add("disabled-row");
+				openEditsToggle.input.title = "Required in Permission Mode: Edits must be reviewed and applied manually.";
+			} else {
+				openEditsToggle.input.disabled = false;
+				openEditsToggle.input.checked = localStorage.getItem("defaultOpenEditsForReview") !== "false";
+				openEditsToggle.wrapper.classList.remove("disabled-row");
+				openEditsToggle.input.title = "Open modified and newly created files in editor tabs for diff review.";
+			}
+		};
+		updateOpenEditsToggle(forgivenessToggle.input.checked);
+
+		const origForgivenessOnChange = forgivenessToggle.input.onchange;
+		forgivenessToggle.input.onchange = () => {
+			if (origForgivenessOnChange) origForgivenessOnChange();
+			updateOpenEditsToggle(forgivenessToggle.input.checked);
+		};
 
 		const createNumberInputRow = (id, title, desc, key, defaultValue, min = 1, max = 10) => {
 			const wrapper = document.createElement("div");
