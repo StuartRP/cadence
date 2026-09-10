@@ -29,6 +29,13 @@ export default class AIManagerMessageRenderer {
 
     parseToolArgs(toolArgs) {
         if (!toolArgs) return {};
+        const trimmed = toolArgs.trim();
+        if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+            try {
+                const parsedJson = JSON.parse(trimmed);
+                if (parsedJson && typeof parsedJson === 'object') return parsedJson;
+            } catch (_) {}
+        }
         const args = {};
         const tagRegex = /<([a-zA-Z0-9_-]+)>([\s\S]*?)<\/\1>/g;
         let tagMatch;
@@ -609,8 +616,16 @@ export default class AIManagerMessageRenderer {
                 else if (toolName === "query") icon = "help";
 
                 let label = `<code>${toolName}</code>`;
-                const fileActions = ["edit_file", "read_file", "create_file", "find_file", "open_file", "search_in_file"];
-                if (args.url) {
+                const fileActions = ["edit_file", "read_file", "create_file", "find_file", "open_file", "search_in_file", "read_file_outline", "edit_remove_lines", "refactor_copy_lines"];
+                const filePath = args.path || args.filePath || args.filepath || args.file || args.targetPath || args.target_file || args.target;
+                if (toolName === "search_files") {
+                    const queryText = args.query || "";
+                    const truncatedQuery = queryText.length > 50 ? queryText.substring(0, 50) + "..." : queryText;
+                    const queryHtml = truncatedQuery ? ` <span class="tool-call-query">"${this._escapeHtml(truncatedQuery)}"</span>` : "";
+                    const searchPath = args.path || args.dir || args.targetPath || args.target;
+                    const pathInfo = searchPath ? ` <span class="tool-call-cwd" style="opacity:0.8; font-size:0.9em;">(in <code>${this._escapeHtml(searchPath)}</code>)</span>` : "";
+                    label = `<code>${toolName}:</code>${queryHtml}${pathInfo}`;
+                } else if (args.url) {
                     const rawUrl = args.url.trim();
                     const displayUrl = rawUrl.length > 55 ? rawUrl.substring(0, 55) + "..." : rawUrl;
                     let urlSuffix = "";
@@ -619,9 +634,9 @@ export default class AIManagerMessageRenderer {
                         const shortGrep = grep.trim().length > 25 ? grep.trim().substring(0, 25) + "..." : grep.trim();
                         urlSuffix += ` grep:"${shortGrep}"`;
                     } else {
-                        const start = parseInt(args.startLine ?? args.startline ?? args.start_line ?? args.start, 10);
-                        const count = parseInt(args.lineCount ?? args.linecount ?? args.line_count ?? args.count, 10);
-                        const end = parseInt(args.endLine ?? args.endline ?? args.end_line ?? args.end, 10);
+                        const start = parseInt(args.startLine ?? args.startline ?? args.start_line ?? args.start ?? args.offset ?? args.fromLine, 10);
+                        const count = parseInt(args.lineCount ?? args.linecount ?? args.line_count ?? args.count ?? args.limit ?? args.lines ?? args.numLines, 10);
+                        const end = parseInt(args.endLine ?? args.endline ?? args.end_line ?? args.end ?? args.toLine, 10);
                         if (!isNaN(start) && !isNaN(count)) {
                             const calculatedEnd = start + count - 1;
                             urlSuffix += calculatedEnd > start ? ` #L${start}-${calculatedEnd}` : ` #L${start}`;
@@ -637,44 +652,60 @@ export default class AIManagerMessageRenderer {
                         urlSuffix += ` (raw)`;
                     }
                     label = `<code>${toolName}:</code> <a href="${this._escapeHtml(rawUrl)}" target="_blank" rel="noopener noreferrer" class="tool-call-link" title="${this._escapeHtml(rawUrl)}">${this._escapeHtml(displayUrl)}</a>${urlSuffix ? ` <span class="tool-call-range" style="opacity: 0.8; font-family: monospace;">${this._escapeHtml(urlSuffix)}</span>` : ""}`;
-                } else if (args.path) {
+                } else if (filePath) {
                     if (fileActions.includes(toolName)) {
-                        const shortFile = args.path.split('/').pop() || args.path;
-                        let fileChipHtml = `<ui-filechip filename="${this._escapeHtml(shortFile)}" path="${this._escapeHtml(args.path)}"></ui-filechip>`;
+                        const shortFile = filePath.split('/').pop() || filePath;
+                        const rawStart = args.startLine ?? args.startline ?? args.start_line ?? args.start ?? args.offset ?? args.fromLine ?? args.line ?? (Array.isArray(args.edits) && args.edits[0] ? (args.edits[0].line ?? args.edits[0].startLine) : undefined);
+                        const start = parseInt(rawStart, 10);
+                        const count = parseInt(args.lineCount ?? args.linecount ?? args.line_count ?? args.count ?? args.limit ?? args.lines ?? args.numLines, 10);
+                        const end = parseInt(args.endLine ?? args.endline ?? args.end_line ?? args.end ?? args.toLine, 10);
+                        let targetLine = (!isNaN(start) && start > 0) ? start : null;
+                        if (!targetLine && toolName === "read_file" && !isNaN(count) && count > 0) {
+                            targetLine = 1;
+                        }
+                        const lineAttr = targetLine ? ` line="${targetLine}"` : "";
+                        let fileChipHtml = `<ui-filechip filename="${this._escapeHtml(shortFile)}" path="${this._escapeHtml(filePath)}"${lineAttr}></ui-filechip>`;
                         if (toolName === "read_file") {
-                            const start = parseInt(args.startLine ?? args.startline ?? args.start_line ?? args.start, 10);
-                            const count = parseInt(args.lineCount ?? args.linecount ?? args.line_count ?? args.count, 10);
-                            const end = parseInt(args.endLine ?? args.endline ?? args.end_line ?? args.end, 10);
+                            let rangeText = "";
                             if (!isNaN(start) && !isNaN(end)) {
-                                fileChipHtml += ` #L${start}-${end}`;
+                                rangeText = ` #L${start}-${end}`;
                             } else if (!isNaN(start) && !isNaN(count)) {
                                 const calculatedEnd = start + count - 1;
-                                fileChipHtml += calculatedEnd > start ? ` #L${start}-${calculatedEnd}` : ` #L${start}`;
+                                rangeText = calculatedEnd > start ? ` #L${start}-${calculatedEnd}` : ` #L${start}`;
                             } else if (!isNaN(start)) {
-                                fileChipHtml += ` #L${start}`;
+                                rangeText = ` #L${start}`;
                             } else if (!isNaN(count) && count > 0) {
-                                fileChipHtml += ` #L1-${count}`;
+                                rangeText = ` #L1-${count}`;
                             }
+                            fileChipHtml += rangeText;
                         } else if (toolName === "search_in_file") {
                             const queryText = args.query || "";
                             const truncatedQuery = queryText.length > 20 ? queryText.substring(0, 20) + "..." : queryText;
                             if (truncatedQuery) fileChipHtml += ` <span class="tool-call-query">"${this._escapeHtml(truncatedQuery)}"</span>`;
                         } else if (toolName === "edit_file") {
                             let searchLines = 0, replaceLines = 0, replaceBytes = 0;
-                            if (Array.isArray(args.edits) && args.edits.length > 0) {
-                                for (const ed of args.edits) {
-                                    if (ed.search) searchLines += ed.search.split('\n').length;
-                                    if (ed.replace) {
-                                        replaceLines += ed.replace.split('\n').length;
-                                        replaceBytes += (new TextEncoder().encode(ed.replace)).length;
+                            let editsList = args.edits;
+                            if (typeof editsList === 'string') {
+                                try { editsList = JSON.parse(editsList); } catch (_) { editsList = []; }
+                            }
+                            if (Array.isArray(editsList) && editsList.length > 0) {
+                                for (const ed of editsList) {
+                                    const s = ed.search !== undefined ? ed.search : ed.searchString;
+                                    const r = ed.replace !== undefined ? ed.replace : ed.replacementString;
+                                    if (s) searchLines += s.split('\n').length;
+                                    if (r) {
+                                        replaceLines += r.split('\n').length;
+                                        replaceBytes += (new TextEncoder().encode(r)).length;
                                     }
                                 }
                             } else {
-                                searchLines = (args.search && args.search.length > 0) ? args.search.split('\n').length : 0;
-                                replaceLines = (args.replace && args.replace.length > 0) ? args.replace.split('\n').length : 0;
-                                replaceBytes = (new TextEncoder().encode(args.replace || "")).length;
+                                const s = args.search !== undefined ? args.search : args.searchString;
+                                const r = args.replace !== undefined ? args.replace : args.replacementString;
+                                searchLines = (s && s.length > 0) ? s.split('\n').length : 0;
+                                replaceLines = (r && r.length > 0) ? r.split('\n').length : 0;
+                                replaceBytes = (new TextEncoder().encode(r || "")).length;
                             }
-                            const editsBadge = (Array.isArray(args.edits) && args.edits.length > 1) ? `<span class="tool-call-edits-count">${args.edits.length} edits</span> ` : "";
+                            const editsBadge = (Array.isArray(editsList) && editsList.length > 1) ? `<span class="tool-call-edits-count">${editsList.length} edits</span> ` : "";
                             fileChipHtml += ` ${editsBadge}<span class="tool-call-bytes">${this.formatByteSize(replaceBytes)}</span> <span class="tool-call-lines-badge">[<span style="color: var(--color-success, #2ea44f);">+${replaceLines}</span> <span style="color: var(--color-error, #cf222e);">${searchLines > 0 ? `-${searchLines}` : '-0'}</span>]</span>`;
                         } else if (toolName === "create_file") {
                             const contentLines = (args.content && args.content.length > 0) ? args.content.split('\n').length : 0;
@@ -683,7 +714,7 @@ export default class AIManagerMessageRenderer {
                         }
                         label = `<code>${toolName}:</code> ${fileChipHtml}`;
                     } else {
-                        label = `<code>${toolName}:</code> <span class="tool-call-path" title="${this._escapeHtml(args.path)}">${this._escapeHtml(args.path)}</span>`;
+                        label = `<code>${toolName}:</code> <span class="tool-call-path" title="${this._escapeHtml(filePath)}">${this._escapeHtml(filePath)}</span>`;
                     }
                 } else if (args.command) {
                     const truncatedCmd = args.command.length > 50 ? args.command.substring(0, 50) + "..." : args.command;
@@ -846,8 +877,16 @@ export default class AIManagerMessageRenderer {
         else if (toolName === "query") icon = "help";
 
         let label = `<code>${toolName}</code>`;
-        const fileActions = ["edit_file", "read_file", "create_file", "find_file", "open_file", "search_in_file"];
-        if (args.url) {
+        const fileActions = ["edit_file", "read_file", "create_file", "find_file", "open_file", "search_in_file", "read_file_outline", "edit_remove_lines", "refactor_copy_lines"];
+        const filePath = args.path || args.filePath || args.filepath || args.file || args.targetPath || args.target_file || args.target;
+        if (toolName === "search_files") {
+            const queryText = args.query || "";
+            const truncatedQuery = queryText.length > 50 ? queryText.substring(0, 50) + "..." : queryText;
+            const queryHtml = truncatedQuery ? ` <span class="tool-call-query">"${this._escapeHtml(truncatedQuery)}"</span>` : "";
+            const searchPath = args.path || args.dir || args.targetPath || args.target;
+            const pathInfo = searchPath ? ` <span class="tool-call-cwd" style="opacity:0.8; font-size:0.9em;">(in <code>${this._escapeHtml(searchPath)}</code>)</span>` : "";
+            label = `<code>${toolName}:</code>${queryHtml}${pathInfo}`;
+        } else if (args.url) {
             const rawUrl = (args.url || "").trim();
             const displayUrl = rawUrl.length > 55 ? rawUrl.substring(0, 55) + "..." : rawUrl;
             let urlSuffix = "";
@@ -874,14 +913,20 @@ export default class AIManagerMessageRenderer {
                 urlSuffix += ` (raw)`;
             }
             label = `<code>${toolName}:</code> <a href="${this._escapeHtml(rawUrl)}" target="_blank" rel="noopener noreferrer" class="tool-call-link" title="${this._escapeHtml(rawUrl)}">${this._escapeHtml(displayUrl)}</a>${urlSuffix ? ` <span class="tool-call-range" style="opacity: 0.8; font-family: monospace;">${this._escapeHtml(urlSuffix)}</span>` : ""}`;
-        } else if (args.path) {
+        } else if (filePath) {
             if (fileActions.includes(toolName)) {
-                const shortFile = args.path.split('/').pop() || args.path;
-                let fileChipHtml = `<ui-filechip filename="${this._escapeHtml(shortFile)}" path="${this._escapeHtml(args.path)}"></ui-filechip>`;
+                const shortFile = filePath.split('/').pop() || filePath;
+                const rawStart = args.startLine ?? args.startline ?? args.start_line ?? args.start ?? args.offset ?? args.fromLine ?? args.line ?? (Array.isArray(args.edits) && args.edits[0] ? (args.edits[0].line ?? args.edits[0].startLine) : undefined);
+                const start = parseInt(rawStart, 10);
+                const count = parseInt(args.lineCount ?? args.linecount ?? args.line_count ?? args.count ?? args.limit ?? args.lines ?? args.numLines, 10);
+                const end = parseInt(args.endLine ?? args.endline ?? args.end_line ?? args.end ?? args.toLine, 10);
+                let targetLine = (!isNaN(start) && start > 0) ? start : null;
+                if (!targetLine && toolName === "read_file" && !isNaN(count) && count > 0) {
+                    targetLine = 1;
+                }
+                const lineAttr = targetLine ? ` line="${targetLine}"` : "";
+                let fileChipHtml = `<ui-filechip filename="${this._escapeHtml(shortFile)}" path="${this._escapeHtml(filePath)}"${lineAttr}></ui-filechip>`;
                 if (toolName === "read_file") {
-                    const start = parseInt(args.startLine ?? args.startline ?? args.start_line ?? args.start, 10);
-                    const count = parseInt(args.lineCount ?? args.linecount ?? args.line_count ?? args.count, 10);
-                    const end = parseInt(args.endLine ?? args.endline ?? args.end_line ?? args.end, 10);
                     if (!isNaN(start) && !isNaN(end)) {
                         fileChipHtml += ` #L${start}-${end}`;
                     } else if (!isNaN(start) && !isNaN(count)) {
@@ -898,29 +943,37 @@ export default class AIManagerMessageRenderer {
                     if (truncatedQuery) fileChipHtml += ` <span class="tool-call-query">"${this._escapeHtml(truncatedQuery)}"</span>`;
                 } else if (toolName === "edit_file") {
                     let searchLines = 0, replaceLines = 0, replaceBytes = 0;
-                    if (Array.isArray(args.edits) && args.edits.length > 0) {
-                        for (const ed of args.edits) {
-                            if (ed.search) searchLines += ed.search.split('\n').length;
-                            if (ed.replace) {
-                                replaceLines += ed.replace.split('\n').length;
-                                replaceBytes += ed.replace.length;
+                    let editsList = args.edits;
+                    if (typeof editsList === 'string') {
+                        try { editsList = JSON.parse(editsList); } catch (_) { editsList = []; }
+                    }
+                    if (Array.isArray(editsList) && editsList.length > 0) {
+                        for (const ed of editsList) {
+                            const s = ed.search !== undefined ? ed.search : ed.searchString;
+                            const r = ed.replace !== undefined ? ed.replace : ed.replacementString;
+                            if (s) searchLines += s.split('\n').length;
+                            if (r) {
+                                replaceLines += r.split('\n').length;
+                                replaceBytes += (new TextEncoder().encode(r)).length;
                             }
                         }
                     } else {
-                        searchLines = (args.search && args.search.length > 0) ? args.search.split('\n').length : 0;
-                        replaceLines = (args.replace && args.replace.length > 0) ? args.replace.split('\n').length : 0;
-                        replaceBytes = (args.replace || "").length;
+                        const s = args.search !== undefined ? args.search : args.searchString;
+                        const r = args.replace !== undefined ? args.replace : args.replacementString;
+                        searchLines = (s && s.length > 0) ? s.split('\n').length : 0;
+                        replaceLines = (r && r.length > 0) ? r.split('\n').length : 0;
+                        replaceBytes = (new TextEncoder().encode(r || "")).length;
                     }
-                    const editsBadge = (Array.isArray(args.edits) && args.edits.length > 1) ? `<span class="tool-call-edits-count">${args.edits.length} edits</span> ` : "";
+                    const editsBadge = (Array.isArray(editsList) && editsList.length > 1) ? `<span class="tool-call-edits-count">${editsList.length} edits</span> ` : "";
                     fileChipHtml += ` ${editsBadge}<span class="tool-call-bytes">${this.formatByteSize(replaceBytes)}</span> <span class="tool-call-lines-badge">[<span style="color: var(--color-success, #2ea44f);">+${replaceLines}</span> <span style="color: var(--color-error, #cf222e);">${searchLines > 0 ? `-${searchLines}` : '-0'}</span>]</span>`;
                 } else if (toolName === "create_file") {
                     const contentLines = (args.content && args.content.length > 0) ? args.content.split('\n').length : 0;
-                    const contentBytes = (args.content || "").length;
+                    const contentBytes = (new TextEncoder().encode(args.content || "")).length;
                     fileChipHtml += ` <span class="tool-call-bytes">${this.formatByteSize(contentBytes)}</span> <span class="tool-call-lines-badge">[<span style="color: var(--color-success, #2ea44f);">+${contentLines}</span>]</span>`;
                 }
                 label = `<code>${toolName}:</code> ${fileChipHtml}`;
             } else {
-                label = `<code>${toolName}:</code> <span class="tool-call-path" title="${this._escapeHtml(args.path)}">${this._escapeHtml(args.path)}</span>`;
+                label = `<code>${toolName}:</code> <span class="tool-call-path" title="${this._escapeHtml(filePath)}">${this._escapeHtml(filePath)}</span>`;
             }
         } else if (args.command) {
             const truncatedCmd = args.command.length > 50 ? args.command.substring(0, 50) + "..." : args.command;
@@ -936,6 +989,9 @@ export default class AIManagerMessageRenderer {
             label = `<code>${toolName}</code>`;
         } else if (args.question) {
             const truncated = args.question.length > 60 ? args.question.substring(0, 60) + "..." : args.question;
+            label = `<code>${toolName}:</code> <span class="tool-call-query">"${this._escapeHtml(truncated)}"</span>`;
+        } else if (args.query) {
+            const truncated = args.query.length > 50 ? args.query.substring(0, 50) + "..." : args.query;
             label = `<code>${toolName}:</code> <span class="tool-call-query">"${this._escapeHtml(truncated)}"</span>`;
         }
 
@@ -1032,10 +1088,17 @@ export default class AIManagerMessageRenderer {
         const toolCallsList = [];
         if (message && message.toolCalls && message.toolCalls.length > 0) {
             for (const tc of message.toolCalls) {
-                const callObj = tc.functionCall || tc;
+                const callObj = tc.functionCall || tc.function || tc;
                 const name = callObj.name || tc.name || "";
-                let rawArgs = callObj.args || callObj.arguments || {};
-                let args = typeof rawArgs === 'string' ? (JSON.parse(rawArgs) || {}) : rawArgs;
+                let rawArgs = callObj.args || callObj.arguments || tc.arguments || tc.args || {};
+                let args = rawArgs;
+                if (typeof rawArgs === 'string') {
+                    try {
+                        args = JSON.parse(rawArgs) || {};
+                    } catch (_) {
+                        args = {};
+                    }
+                }
                 toolCallsList.push({ name, args, status: tc.status });
             }
         } else if (parsed.toolCallBlocks && parsed.toolCallBlocks.length > 0) {
@@ -1075,6 +1138,16 @@ export default class AIManagerMessageRenderer {
         // Helper to format concise details for a tool call
         const getToolDetails = (toolName, args) => {
             if (!args) return "";
+            const filePath = args.path || args.filePath || args.filepath || args.file || args.targetPath || args.target_file || args.target || args.source;
+            if (toolName === "search_files") {
+                const queryText = args.query || "";
+                const shortQuery = queryText.length > 25 ? queryText.substring(0, 25) + "..." : queryText;
+                const searchPath = filePath ? (filePath.split('/').filter(Boolean).pop() || filePath) : "";
+                if (shortQuery && searchPath) return `"${shortQuery}" (in ${searchPath})`;
+                if (shortQuery) return `"${shortQuery}"`;
+                if (searchPath) return `(in ${searchPath})`;
+                return "";
+            }
             if (args.url) {
                 const rawUrl = (args.url || '').trim();
                 let text = rawUrl.length > 30 ? rawUrl.substring(0, 30) + "..." : rawUrl;
@@ -1083,9 +1156,9 @@ export default class AIManagerMessageRenderer {
                     const shortGrep = grep.trim().length > 15 ? grep.trim().substring(0, 15) + "..." : grep.trim();
                     text += ` grep:"${shortGrep}"`;
                 } else {
-                    const start = parseInt(args.startLine ?? args.startline ?? args.start_line ?? args.start, 10);
-                    const count = parseInt(args.lineCount ?? args.linecount ?? args.line_count ?? args.count, 10);
-                    const end = parseInt(args.endLine ?? args.endline ?? args.end_line ?? args.end, 10);
+                    const start = parseInt(args.startLine ?? args.startline ?? args.start_line ?? args.start ?? args.offset ?? args.fromLine, 10);
+                    const count = parseInt(args.lineCount ?? args.linecount ?? args.line_count ?? args.count ?? args.limit ?? args.lines ?? args.numLines, 10);
+                    const end = parseInt(args.endLine ?? args.endline ?? args.end_line ?? args.end ?? args.toLine, 10);
                     if (!isNaN(start) && !isNaN(count)) {
                         const calculatedEnd = start + count - 1;
                         text += calculatedEnd > start ? ` #L${start}-${calculatedEnd}` : ` #L${start}`;
@@ -1106,13 +1179,13 @@ export default class AIManagerMessageRenderer {
                 const cwdVal = args.cwd || args.dir;
                 const cwdInfo = cwdVal ? ` (in ${this._escapeHtml(cwdVal.split('/').filter(Boolean).pop() || cwdVal)})` : '';
                 return `$ ${this._escapeHtml(shortCmd)}${cwdInfo}`;
-            } else if (args.path) {
-                const shortFile = args.path.split('/').pop() || args.path;
+            } else if (filePath) {
+                const shortFile = filePath.split('/').pop() || filePath;
                 let details = shortFile;
                 if (toolName === "read_file") {
-                    const start = parseInt(args.startLine ?? args.startline ?? args.start_line ?? args.start, 10);
-                    const count = parseInt(args.lineCount ?? args.linecount ?? args.line_count ?? args.count, 10);
-                    const end = parseInt(args.endLine ?? args.endline ?? args.end_line ?? args.end, 10);
+                    const start = parseInt(args.startLine ?? args.startline ?? args.start_line ?? args.start ?? args.offset ?? args.fromLine, 10);
+                    const count = parseInt(args.lineCount ?? args.linecount ?? args.line_count ?? args.count ?? args.limit ?? args.lines ?? args.numLines, 10);
+                    const end = parseInt(args.endLine ?? args.endline ?? args.end_line ?? args.end ?? args.toLine, 10);
                     if (!isNaN(start) && !isNaN(end)) {
                         details += ` #L${start}-${end}`;
                     } else if (!isNaN(start) && !isNaN(count)) {
@@ -1123,28 +1196,41 @@ export default class AIManagerMessageRenderer {
                     } else if (!isNaN(count) && count > 0) {
                         details += ` #L1-${count}`;
                     }
-                } else if (toolName === "edit_file" && (args.edits || args.search !== undefined || args.replace !== undefined)) {
+                } else if (toolName === "edit_file" && (args.edits || args.search !== undefined || args.searchString !== undefined || args.replace !== undefined || args.replacementString !== undefined)) {
                     let searchLines = 0, replaceLines = 0, replaceBytes = 0;
-                    if (Array.isArray(args.edits) && args.edits.length > 0) {
-                        for (const ed of args.edits) {
-                            if (ed.search) searchLines += ed.search.split('\n').length;
-                            if (ed.replace) {
-                                replaceLines += ed.replace.split('\n').length;
-                                replaceBytes += (new TextEncoder().encode(ed.replace)).length;
+                    let editsList = args.edits;
+                    if (typeof editsList === 'string') {
+                        try { editsList = JSON.parse(editsList); } catch (_) { editsList = []; }
+                    }
+                    if (Array.isArray(editsList) && editsList.length > 0) {
+                        for (const ed of editsList) {
+                            const s = ed.search !== undefined ? ed.search : ed.searchString;
+                            const r = ed.replace !== undefined ? ed.replace : ed.replacementString;
+                            if (s) searchLines += s.split('\n').length;
+                            if (r) {
+                                replaceLines += r.split('\n').length;
+                                replaceBytes += (new TextEncoder().encode(r)).length;
                             }
                         }
                     } else {
-                        searchLines = (args.search && args.search.length > 0) ? args.search.split('\n').length : 0;
-                        replaceLines = (args.replace && args.replace.length > 0) ? args.replace.split('\n').length : 0;
-                        replaceBytes = (new TextEncoder().encode(args.replace || "")).length;
+                        const s = args.search !== undefined ? args.search : args.searchString;
+                        const r = args.replace !== undefined ? args.replace : args.replacementString;
+                        searchLines = (s && s.length > 0) ? s.split('\n').length : 0;
+                        replaceLines = (r && r.length > 0) ? r.split('\n').length : 0;
+                        replaceBytes = (new TextEncoder().encode(r || "")).length;
                     }
-                    const editCountStr = (Array.isArray(args.edits) && args.edits.length > 1) ? ` (${args.edits.length} edits)` : "";
+                    const editCountStr = (Array.isArray(editsList) && editsList.length > 1) ? ` (${editsList.length} edits)` : "";
                     details += `${editCountStr} (+${replaceLines} -${searchLines}, ${this.formatByteSize(replaceBytes, true)})`;
                 } else if (toolName === "create_file" && args.content !== undefined) {
                     const contentLines = (args.content && args.content.length > 0) ? args.content.split('\n').length : 0;
                     const contentBytes = (new TextEncoder().encode(args.content || "")).length;
                     details += ` (+${contentLines}, ${this.formatByteSize(contentBytes, true)})`;
+                } else if (toolName === "search_in_file" && args.query) {
+                    const queryText = args.query || "";
+                    const truncatedQuery = queryText.length > 20 ? queryText.substring(0, 20) + "..." : queryText;
+                    if (truncatedQuery) details += ` "${truncatedQuery}"`;
                 }
+                return details;
             } else if (toolName === "scratchpad_write") {
                 const mode = (args.mode || "replace").toLowerCase();
                 const contentStr = (args.content || args.notes || "").trim();
@@ -1164,8 +1250,8 @@ export default class AIManagerMessageRenderer {
             const formattedCalls = toolCallsList.map(tc => {
                 const statusClass = tc.status === "success" ? "success" : (tc.status === "failed" ? "failed" : "pending");
                 const details = getToolDetails(tc.name, tc.args);
-                const detailsHtml = details ? ` <span style="opacity:0.85;">${details}</span>` : "";
-                return `<code class="turn-tool-chip ${statusClass}">${tc.name}</code>${detailsHtml}`;
+                const detailsHtml = details ? ` <span style="opacity:0.85;">${this._escapeHtml(details)}</span>` : "";
+                return `<code class="turn-tool-chip ${statusClass}">${this._escapeHtml(tc.name)}</code>${detailsHtml}`;
             });
             toolSummary = formattedCalls.join(", ");
         }

@@ -19,7 +19,8 @@ export class FileChip extends Button {
             // Handle cases where it's created via HTML tag
             const filename = this.getAttribute('filename') || this.getAttribute('data-filename');
             const path = this.getAttribute('path') || this.getAttribute('data-path');
-            this.id = `filechip-${path || 'unknown'}`;
+            const line = this.getAttribute('line') || this.getAttribute('data-line');
+            this.id = `filechip-${path || 'unknown'}${line ? `-${line}` : ''}`;
             
             const textElement = document.createElement('span');
             textElement.textContent = filename || '';
@@ -27,6 +28,9 @@ export class FileChip extends Button {
             
             if (path) {
                 this.setAttribute('data-path', path);
+            }
+            if (line) {
+                this.setAttribute('data-line', line);
             }
         }
         
@@ -58,12 +62,18 @@ export class FileChip extends Button {
 
         this.onclick = (e) => {
             if (e.target !== this._close) {
-                const path = this.getAttribute('data-path') || (this.config && this.config.path);
+                e.stopPropagation();
+                const path = this.getAttribute('data-path') || this.getAttribute('path') || (this.config && this.config.path);
+                const lineAttr = this.getAttribute('data-line') || this.getAttribute('line') || (this.config && this.config.line);
+                const line = lineAttr ? parseInt(lineAttr, 10) : undefined;
                 if (path) {
                     this.dispatchEvent(new CustomEvent('file-focus-request', {
                         bubbles: true,
                         composed: true,
-                        detail: { path }
+                        detail: { 
+                            path,
+                            line: (!isNaN(line) && line > 0) ? line : undefined
+                        }
                     }));
                 }
             }
@@ -93,6 +103,26 @@ export class FileChip extends Button {
                 this._close.click(); // Trigger the close button's click handler
             }
         });
+    }
+
+    connectedCallback() {
+        if (!this.config) {
+            const filename = this.getAttribute('filename') || this.getAttribute('data-filename');
+            const path = this.getAttribute('path') || this.getAttribute('data-path');
+            const line = this.getAttribute('line') || this.getAttribute('data-line');
+            if (filename && this._textElement && !this._textElement.textContent) {
+                this._textElement.textContent = filename;
+            }
+            if (path && !this.getAttribute('data-path')) {
+                this.setAttribute('data-path', path);
+            }
+            if (line && !this.getAttribute('data-line')) {
+                this.setAttribute('data-line', line);
+            }
+            if (path && (!this.id || this.id.includes('unknown'))) {
+                this.id = `filechip-${path}${line ? `-${line}` : ''}`;
+            }
+        }
     }
 }
 

@@ -1519,6 +1519,11 @@ ui-editor-holder .artifacts-accordion-container .ace_editor,
     margin-right: 0;
 }
 
+.artifacts-accordion-container .toggle-row.disabled-row {
+    opacity: 0.55;
+    pointer-events: none;
+}
+
 /* Number input rows: input first, then label/description */
 .artifacts-accordion-container .number-input-row {
     align-items: center;
