@@ -318,12 +318,14 @@ class AIManagerSessions {
 			promptText = "[system] Implementation plan accepted. Execute the checklist step-by-step.";
 			if (comment) promptText += `\n\nAdditional Instructions:\n${comment}`;
 
-			// Disable planning mode so the model can actually implement its plan
-			this.manager.planningMode = false;
-			localStorage.setItem("aiPlanningMode", "false");
+			// Disable planning mode for this session so the model can actually implement its plan
 			sourceSession.planningMode = false;
-			this.manager._updatePromptAreaPlaceholder();
-			this.manager._updateAgentProgressPanel();
+			if (sourceSession.id === this.activeSessionId) {
+				this.manager.planningMode = false;
+				localStorage.setItem("aiPlanningMode", "false");
+				this.manager._updatePromptAreaPlaceholder();
+				this.manager._updateAgentProgressPanel();
+			}
 		} else {
 			if (comment) {
 				promptText = `[system] The proposed implementation plan has been rejected. Review the feedback and formulate a new plan.\n\nFeedback:\n${comment}`;
@@ -416,9 +418,6 @@ class AIManagerSessions {
 		if (this.activeSession && this.activeSession.id && !this.externalRunningSessions.has(this.activeSession.id)) {
 			this.activeSession.promptInput = this.manager.promptEditor.getValue();
 			this.activeSession.scrollTop = this.manager.conversationArea.scrollTop; // Save current scroll position
-			this.activeSession.agentMode = this.manager.agentMode;
-			this.activeSession.planningMode = this.manager.planningMode;
-			this.activeSession.forgivenessMode = this.manager.forgivenessMode;
 			if (this.manager.aiInfoDisplay && this.manager.aiInfoDisplay.value) {
 				this.activeSession.connectionId = this.manager.aiInfoDisplay.value;
 			}

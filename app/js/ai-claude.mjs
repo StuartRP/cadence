@@ -135,7 +135,16 @@ class Claude extends AI {
 
     _getFormattedTools(session = null) {
         const isSubAgent = !!(session && session.parentId);
-        const toolSet = getToolsForSession(isSubAgent, this.supportsJSONTools);
+        let toolSet = getToolsForSession(isSubAgent, this.supportsJSONTools);
+        if (!isSubAgent) {
+            const isPlanning = session ? (session.planningMode ?? window.ui?.aiManager?.planningMode === true) : (window.ui?.aiManager?.planningMode === true);
+            toolSet = toolSet.filter(t => {
+                if (isPlanning && (t.name === "create_file" || t.name === "edit_file")) return false;
+                if (session && session.allowSubAgents === false && t.name === "create_sub_agent") return false;
+                if (session && session.allowRunCommand === false && (t.name === "run_command" || t.name === "exec_command")) return false;
+                return true;
+            });
+        }
         return toolSet.map(tool => ({
             name: tool.name,
             description: tool.description || "",
@@ -382,7 +391,7 @@ class Claude extends AI {
 
     async generate(prompt, callbacks = {}) {
         const messages = [{ role: "user", type: "user", content: prompt }];
-        return this.chat(messages, callbacks);
+        return this.chat(messages, callbacks, null, { noTools: true });
     }
     
     async chat(messages, callbacks = {}, systemPrompt = null, session = null) {
@@ -402,9 +411,13 @@ class Claude extends AI {
                 max_tokens: 4096
             };
 
-            // Omit the tool schema for tool-less calls (e.g. cycle summarization).
-            if (!(session && session.noTools)) {
-                requestBody.tools = this._getFormattedTools(session);
+            // Omit the tool schema for tool-less calls (e.g. cycle summarization) or if agent mode is off.
+            const isAgent = session ? (session.agentMode ?? window.ui?.aiManager?.agentMode) : window.ui?.aiManager?.agentMode;
+            if (!(session && session.noTools) && (isAgent || (session && session.parentId))) {
+                const formattedTools = this._getFormattedTools(session);
+                if (formattedTools.length > 0) {
+                    requestBody.tools = formattedTools;
+                }
             }
 
             if (session && session.temperatureOverride !== undefined) {

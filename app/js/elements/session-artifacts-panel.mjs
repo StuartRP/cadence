@@ -632,9 +632,9 @@ export class SessionArtifactsPanel extends Block {
         this.scratchpadAccordion.applyState(session._accordionStates.scratchpad !== false);
 
         // Update checkbox toggles and numeric inputs
-        this.agentModeCheckbox.checked = session.agentMode ?? (ui.aiManager.agentMode || false);
-        this.planningModeCheckbox.checked = session.planningMode ?? (ui.aiManager.planningMode || false);
-        this.forgivenessModeCheckbox.checked = session.forgivenessMode ?? (ui.aiManager.forgivenessMode || false);
+        this.agentModeCheckbox.checked = session.agentMode ?? (ui.aiManager.config?.defaultAgentMode ?? false);
+        this.planningModeCheckbox.checked = session.planningMode ?? (ui.aiManager.config?.defaultPlanningMode ?? true);
+        this.forgivenessModeCheckbox.checked = session.forgivenessMode ?? (ui.aiManager.config?.defaultForgivenessMode ?? false);
         this.allowSubAgentsCheckbox.checked = session.allowSubAgents !== false;
         this.allowRunCommandCheckbox.checked = session.allowRunCommand !== false;
         this.autoMilestonesCheckbox.checked = session.autoMilestones ?? (ui.aiManager.config?.defaultAutoMilestones !== false);

@@ -1670,12 +1670,28 @@ class AIManager {
 	}
 
 	/**
-	 * Selects a connection for background cycle compaction. Prefers a *separate* (non-primary) connection so the
-	 * compaction can run in the background without contending with the active prompt. Among the available
-	 * non-busy connections, prefers the fastest one (highest average tokens/sec) so the summary arrives sooner;
-	 * falls back to the size-based heuristic when telemetry is empty.
+	 * Classifies a connection as "paid" when it targets a commercial API provider (Gemini, Claude).
+	 * Local/self-hosted providers (Ollama, Llama.cpp) are considered unpaid.
+	 * @param {object} conn - A connection config object.
+	 * @returns {boolean}
+	 */
+	_isPaidConnection(conn) {
+		return !!conn && (conn.provider === 'gemini' || conn.provider === 'claude');
+	}
+
+	/**
+	 * Selects a connection for background cycle compaction.
+	 *
+	 * Paid connections (Gemini, Claude) are NEVER used for summarisation unless no unpaid (local)
+	 * connection is configured at all. When at least one unpaid connection exists, the selection is
+	 * restricted to unpaid connections: a separate (non-primary), non-busy one is preferred so the
+	 * compaction runs in the background without contending with the active prompt. If every unpaid
+	 * connection is busy or is the primary connection, an unpaid one is still selected (the task
+	 * effectively queues behind the busy work on that connection) rather than falling through to a
+	 * paid connection.
+	 *
 	 * @param {string} primaryConnId - The primary (active) connection ID.
-	 * @returns {Promise<string>} The selected connection ID (falls back to primaryConnId when no separate candidate is available).
+	 * @returns {Promise<string>} The selected connection ID (falls back to primaryConnId when nothing else is available).
 	 */
 	async _selectCompactionConnection(primaryConnId) {
 		try {
@@ -1686,13 +1702,25 @@ class AIManager {
 				else if (running.type === 'chat' && running.controller) conn = running.controller;
 				if (conn && conn.connectionId) busy.add(conn.connectionId);
 			}
-			let candidates = AIConnections.getConnections().filter(c => {
+			const configured = AIConnections.getConnections().filter(c => {
 				const inst = AIConnections.getInstance(c.id);
-				return inst && inst.isConfigured() && !busy.has(c.id);
+				return inst && inst.isConfigured();
 			});
+
+			// Unpaid (local) connections are always preferred for summarisation. Paid connections are
+			// only considered when no unpaid connection is configured at all.
+			const unpaid = configured.filter(c => !this._isPaidConnection(c));
+			const pool = unpaid.length > 0 ? unpaid : configured;
+
 			// Exclude the primary connection when a separate one is available (avoids contention with the active prompt).
+			let candidates = pool.filter(c => !busy.has(c.id));
 			const nonPrimary = candidates.filter(c => c.id !== primaryConnId);
 			if (nonPrimary.length > 0) candidates = nonPrimary;
+
+			// If every candidate in the pool is busy or is the primary connection, still select from the
+			// pool (the summarisation queues behind the busy work) instead of falling through to a paid one.
+			if (candidates.length === 0) candidates = pool;
+
 			if (candidates.length > 0) {
 				const withTps = candidates
 					.map(c => ({ conn: c, tps: AIConnections.getInstance(c.id).averageTokensPerSec || 0 }))
@@ -1703,11 +1731,12 @@ class AIManager {
 					return fastest.conn.id;
 				}
 				const sizePick = await this.selectConnectionForSubAgent("medium", primaryConnId);
-				if (sizePick === primaryConnId && nonPrimary.length > 0) {
-					// The size-based pick landed on the primary connection — prefer a separate one to keep the call off the main thread.
-					return nonPrimary[0].id;
+				// Keep the size-based pick only if it stays within the allowed pool (never a paid one when an unpaid exists).
+				if (candidates.some(c => c.id === sizePick)) {
+					return sizePick;
 				}
-				return sizePick;
+				// Otherwise fall back to the fastest pooled candidate (or the first pooled candidate).
+				return fastest.conn.id;
 			}
 		} catch (e) {
 			console.warn("[Cycle Summary] Connection selection failed, using primary:", e);
@@ -2414,8 +2443,8 @@ class AIManager {
 		const targetSession = this.activeSession;
 		const targetSessionId = this.activeSessionId;
 		const targetAI = this.ai;
-		const targetAgentMode = this.agentMode;
-		const targetForgivenessMode = this.forgivenessMode;
+		const targetAgentMode = targetSession ? (targetSession.agentMode ?? this.agentMode) : this.agentMode;
+		const targetForgivenessMode = targetSession ? (targetSession.forgivenessMode ?? this.forgivenessMode) : this.forgivenessMode;
 
 		// Clear min-height from all previous response blocks to let them reflow naturally.
 		this.conversationArea.querySelectorAll('.response-block').forEach(block => {
@@ -2942,9 +2971,10 @@ class AIManager {
 		});
 	}
 
-	_validateToolArguments(toolCall) {
+	_validateToolArguments(toolCall, session = null) {
 		if (!toolCall) return null;
-		if (this.planningMode && (toolCall.name === "create_file" || toolCall.name === "edit_file")) {
+		const isPlanning = session ? (session.planningMode ?? this.planningMode) : this.planningMode;
+		if (isPlanning && (toolCall.name === "create_file" || toolCall.name === "edit_file")) {
 			return `Tool Error: Tool "${toolCall.name}" is not allowed while in planning mode.`;
 		}
 		if (toolCall.name === "edit_file") {

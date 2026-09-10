@@ -93,7 +93,7 @@ export const tools = [
 	},
 	{
 		name: "read_file",
-		description: "Read a file's contents. Use startLine/lineCount for specific portions.",
+		description: "Read a file's contents. Use startLine/lineCount for specific portions (always prefered).",
 		parameters: {
 			type: "object",
 			properties: {

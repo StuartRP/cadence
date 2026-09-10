@@ -350,7 +350,7 @@ class LlamaCpp extends AI {
 
     async generate(prompt, callbacks = {}) {
         const messages = [{ role: "user", content: prompt }];
-        return this.chat(messages, callbacks);
+        return this.chat(messages, callbacks, null, { noTools: true });
     }
 
     async chat(messages, callbacks = {}, systemPromptOverride = null, session = null) {
@@ -403,11 +403,12 @@ class LlamaCpp extends AI {
                 }
             }
 
-            if (!(session && session.noTools) && (window.ui?.aiManager?.agentMode || (session && session.parentId))) {
+            const isAgent = session ? (session.agentMode ?? window.ui?.aiManager?.agentMode) : window.ui?.aiManager?.agentMode;
+            if (!(session && session.noTools) && (isAgent || (session && session.parentId))) {
                 const isSubAgent = !!(session && session.parentId);
                 let filteredTools = getToolsForSession(isSubAgent, this.supportsJSONTools);
                 if (!isSubAgent) {
-                    const isPlanning = window.ui?.aiManager?.planningMode === true;
+                    const isPlanning = session ? (session.planningMode ?? window.ui?.aiManager?.planningMode === true) : (window.ui?.aiManager?.planningMode === true);
                     filteredTools = filteredTools.filter(t => {
                         if (isPlanning && (t.name === "create_file" || t.name === "edit_file")) return false;
                         if (session && session.allowSubAgents === false && t.name === "create_sub_agent") return false;
