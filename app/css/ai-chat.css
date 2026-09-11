@@ -1320,6 +1320,194 @@
     font-size: 12px;
 }
 
+/* Per-segment (program-level) approval card */
+.agent-cmd-program-list {
+    margin-top: 4px;
+}
+
+.agent-cmd-program-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 8px;
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--text-primary) 3%, transparent);
+}
+
+.agent-cmd-risk-chip {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    padding: 2px 7px;
+    border-radius: 10px;
+    cursor: help;
+    flex-shrink: 0;
+    min-width: 74px;
+    text-align: center;
+    color: var(--text-inverted);
+}
+
+.agent-cmd-risk-chip.risk-safe {
+    background: var(--color-success, #4caf50);
+}
+
+.agent-cmd-risk-chip.risk-moderate {
+    background: var(--color-warning-dark, #ffa000);
+}
+
+.agent-cmd-risk-chip.risk-dangerous,
+.agent-cmd-risk-chip.risk-unknown {
+    background: var(--color-error, #f44336);
+}
+
+.agent-cmd-program-name {
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.agent-cmd-policy-select {
+    flex-shrink: 0;
+    font-size: 12px;
+    padding: 3px 6px;
+    border-radius: 4px;
+    border: 1px solid var(--border-primary);
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    max-width: 170px;
+}
+
+.agent-cmd-warnings {
+    margin-top: 2px;
+    padding: 6px 8px;
+    border-radius: 4px;
+    border-left: 2px solid var(--color-warning, #b58900);
+    background: color-mix(in srgb, var(--color-warning, #b58900) 8%, transparent);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.agent-cmd-warning-line {
+    font-size: 11.5px;
+    color: var(--text-secondary);
+}
+
+.agent-cmd-ok-row {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 4px;
+}
+
+/* Command Policy Review modal (shared, global + session scope) */
+.cmd-policy-review {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.cmd-policy-review-sub {
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.cmd-policy-review-host {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 60vh;
+    overflow-y: auto;
+}
+
+.cmd-policy-review-empty {
+    font-size: 12.5px;
+    color: var(--text-secondary);
+    padding: 8px 4px;
+}
+
+.cmd-policy-review-table {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.cmd-policy-review-header {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    color: var(--text-secondary);
+    padding: 2px 8px;
+    border-bottom: 1px solid var(--border-primary);
+}
+
+.cmd-policy-review-row {
+    padding: 4px 8px;
+}
+
+.cmd-policy-review-col-risk {
+    min-width: 74px;
+}
+
+.cmd-policy-review-col-sel {
+    flex-shrink: 0;
+    max-width: 170px;
+    text-align: right;
+}
+
+.cmd-policy-review-col-bin {
+    flex-shrink: 0;
+    width: 28px;
+}
+
+.cmd-policy-review-remove {
+    flex-shrink: 0;
+    opacity: 0.6;
+    transition: opacity 0.15s ease;
+}
+
+.cmd-policy-review-remove:hover {
+    opacity: 1;
+}
+
+.cmd-policy-review-add {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px;
+    margin-top: 4px;
+    border-top: 1px solid var(--border-primary);
+}
+
+.cmd-policy-review-add-input {
+    flex: 1;
+    min-width: 0;
+    padding: 4px 8px;
+    border-radius: var(--borderRadius);
+    border: 1px solid var(--border-primary);
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    font-size: 12.5px;
+    outline: none;
+    transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.cmd-policy-review-add-input:hover {
+    border-color: var(--theme);
+}
+
+.cmd-policy-review-add-input:focus {
+    border-color: var(--theme);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--theme) 25%, transparent);
+}
+
+.cmd-policy-review-add-sel {
+    flex-shrink: 0;
+    max-width: 170px;
+}
+
 /* Agent Command Output Block */
 .agent-cmd-output-block {
     width: 100%;

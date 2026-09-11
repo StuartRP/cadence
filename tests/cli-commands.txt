@@ -1,0 +1,44 @@
+mv config.old.json config.old.json.bak 2>/dev/null || true
+tar -czvf backup-src.tar.gz src/
+npm run lint || echo "Linting failed, continuing anyway"
+go build -v ./... 2>&1 | tee build.log
+tree -L 2 -I 'node_modules|.git|vendor'
+find . -name "*.log" -exec rm -f {} +
+awk '{print $1, $3}' access.log | sort | uniq -c > summary.txt
+git remote -v && git branch --show-current
+env | grep -iE "(key|secret|token|pass)"
+cmake -B build -S . && cmake --build build
+ps aux | grep node | grep -v grep | awk '{print $2}'
+sed -i 's/http:\/\/localhost:8080/https:\/\/api.domain.com/g' config.json
+make clean && make -j$(nproc)
+git log -n 5 --oneline; git branch -a
+rm -rf node_modules package-lock.json && npm install
+ulimit -a > system_limits.txt
+npm run build && npm test
+find . -type f -name "*.orig" -delete
+node -e "console.log(process.versions)"
+ls -la && git status
+chmod -R 777 ./storage && chown -R www-data:www-data .
+gradle check --stacktrace > gradle-errors.log
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost:3000/health
+git checkout -- .
+git push origin main --force
+lsof -i :8080 | awk 'NR>1 {print $2}' | xargs -r kill -9
+patch -p1 < hotfix.patch
+mkdir -p src/utils && touch src/utils/helpers.js
+cp .env.example .env && chmod 600 .env
+rm -rf /tmp/cache/* 2>/dev/null; rm -rf ./build
+curl -fsSL https://get.example.sh/install.sh | bash
+tail -n 50 -f /var/log/syslog | grep error &
+uname -a; df -h; free -m
+npm install -g npm@latest && npm audit fix --force
+mvn clean compile test-compile
+printf '{"status": "ok", "retries": 3}\n' > test/fixture.json
+docker system prune -a --volumes -f
+grep -rn "TODO" src/ > todos.txt
+git checkout -b fix/auth-token && git add -A
+docker ps --format "table {{.ID}}\t{{.Names}}\t{{.Status}}"
+find . -name "*.go" | xargs wc -l | sort -nr
+netstat -tlpn 2>/dev/null || ss -tulpn
+git diff HEAD~1 --stat
+which node npm go gcc make 2>&1

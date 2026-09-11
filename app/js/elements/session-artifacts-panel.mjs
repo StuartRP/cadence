@@ -2,6 +2,7 @@ import { Block } from './element.mjs';
 import { Button } from './button.mjs';
 import conduitClient from '../conduit-client.mjs';
 import workspaceClient from '../workspace-client.mjs';
+import { openCommandPolicyReviewModal } from '../util/command-policy-review.mjs';
 
 export class UIAccordion extends Block {
     constructor(sectionKey, titleText, iconText, iconColor = null, hasEditButton = false, editBtnClass = "") {
@@ -172,6 +173,48 @@ export class SessionArtifactsPanel extends Block {
         this.openEditsForReviewCheckbox = createToggleRow("accordion-open-edits-for-review", "Open Edits for Review", "Open files in editor for diff review (optional in Forgiveness Mode).", "agent-toggle-wrapper");
         this.allowSubAgentsCheckbox = createToggleRow("accordion-allow-sub-agents", "Allow Sub-Agents", "Allow Cadence to spawn sub-agents to solve smaller tasks.", "sub-agents-toggle-wrapper");
         this.allowRunCommandCheckbox = createToggleRow("accordion-allow-run-command", "Allow Terminal Commands", "Allow Cadence to execute terminal shell commands via the run_command tool.", "run-command-toggle-wrapper");
+        {
+            const runCommandWrapper = this.allowRunCommandCheckbox.closest(".toggle-row");
+            const cog = new Button();
+            cog.className = "setting-cog-btn";
+            cog.icon = "settings";
+            cog.title = "Review command policies (this session)";
+            cog.onclick = async (e) => {
+                e.stopPropagation();
+                const mgr = window.ui?.aiManager;
+                const session = mgr?.activeSession;
+                if (!session) return;
+                // Ensure the session has a normalized commandPolicy in memory.
+                const p = session.commandPolicy || {};
+                const allow = Array.isArray(p.allow) ? p.allow : (Array.isArray(p.whitelist) ? p.whitelist : []);
+                const block = Array.isArray(p.block) ? p.block : (Array.isArray(p.blacklist) ? p.blacklist : []);
+                session.commandPolicy = { allow, block };
+                openCommandPolicyReviewModal({
+                    title: "Command Policies",
+                    scope: "session",
+                    getPolicy: () => session.commandPolicy,
+                    onPersist: async () => {
+                        try {
+                            await workspaceClient.setSession(session.id, session);
+                        } catch (err) {
+                            console.error("Failed to persist session command policy", err);
+                        }
+                    },
+                    getGlobalPolicy: () => {
+                        const m = window.ui?.aiManager;
+                        if (m?.config?.commandPolicy) return m.config.commandPolicy;
+                        m.config.commandPolicy = { allow: [], block: [] };
+                        return m.config.commandPolicy;
+                    },
+                    onPersistGlobal: () => {
+                        const m = window.ui?.aiManager;
+                        if (m?.saveCommandPolicy) m.saveCommandPolicy(m.config.commandPolicy);
+                    }
+                });
+            };
+            runCommandWrapper.classList.add("has-cog");
+            runCommandWrapper.appendChild(cog);
+        }
         this.autoMilestonesCheckbox = createToggleRow("accordion-auto-milestones", "Auto-Milestones on 'done'", "Automatically freeze a checkpoint milestone when the agent finishes a cycle.", "auto-milestones-toggle-wrapper");
         this.autoRollbackCheckbox = createToggleRow("accordion-auto-rollback", "Auto-Rollback on Edit Failures", "Automatically rollback a file if consecutive edit attempts fail.", "auto-rollback-toggle-wrapper");
 

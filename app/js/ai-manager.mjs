@@ -93,6 +93,7 @@ class AIManager {
 			defaultAutoRollbackOnFailures: localStorage.getItem("defaultAutoRollbackOnFailures") === "true",
 			defaultAutoRollbackThreshold: parseInt(localStorage.getItem("defaultAutoRollbackThreshold") || "3", 10),
 			enableGlowAnimation: localStorage.getItem("aiEnableGlowAnimation") !== "false",
+			commandPolicy: AIManager._loadCommandPolicy(),
 		};
 		// NEW: Session TabBar properties
 		this.sessionTabBar = null;
@@ -3560,7 +3561,7 @@ Output only the XML. Do not use any tools.`;
 		return { shouldAbort: false, reason: "" };
 	}
 
-	_detectRepetition(text, minPatternLen = 15, minRepeats = 3) {
+	_detectRepetition(text, minPatternLen = 50, minRepeats = 3) {
 		if (!text || text.length < minPatternLen * minRepeats) return { detected: false };
 
 		const maxPatternLen = Math.floor(text.length / minRepeats);
@@ -4080,6 +4081,38 @@ Output only the XML. Do not use any tools.`;
 		this.ai.chat(messagesForAI, callbacks, systemPrompt, this.activeSession); // Pass session so per-session thinkingLevel override applies.
 	}
 
+	/**
+	 * Loads the master (global) command allow/block policy from localStorage.
+	 * Tolerates the legacy { whitelist, blacklist } shape.
+	 * @returns {{ allow: any[], block: any[] }}
+	 */
+	static _loadCommandPolicy() {
+		try {
+			const raw = localStorage.getItem("aiCommandPolicy");
+			if (!raw) return { allow: [], block: [] };
+			const parsed = JSON.parse(raw);
+			if (!parsed || typeof parsed !== "object") return { allow: [], block: [] };
+			return {
+				allow: Array.isArray(parsed.allow) ? parsed.allow : (Array.isArray(parsed.whitelist) ? parsed.whitelist : []),
+				block: Array.isArray(parsed.block) ? parsed.block : (Array.isArray(parsed.blacklist) ? parsed.blacklist : [])
+			};
+		} catch (e) {
+			return { allow: [], block: [] };
+		}
+	}
+
+	/**
+	 * Persists the master (global) command policy to localStorage and updates
+	 * the in-memory config.
+	 * @param {{ allow?: any[], block?: any[] }} policy
+	 */
+	saveCommandPolicy(policy) {
+		this.config.commandPolicy = policy || { allow: [], block: [] };
+		try {
+			localStorage.setItem("aiCommandPolicy", JSON.stringify(this.config.commandPolicy));
+		} catch (e) { /* storage unavailable */ }
+	}
+
 	async loadSettings() {
 		const storedProvider = localStorage.getItem("aiProvider")
 		const supportedProviders = ["gemini", "llamacpp", "ollama", "claude"];
@@ -4156,6 +4189,9 @@ Output only the XML. Do not use any tools.`;
 		} else {
 			this.config.defaultAllowRunCommand = true;
 		}
+
+		// Master command allow/block policy (global, program-level rules)
+		this.config.commandPolicy = AIManager._loadCommandPolicy();
 	}
 }
 

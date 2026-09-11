@@ -5,6 +5,7 @@ import workspaceClient from '../workspace-client.mjs';
 import { Agent } from './agent.mjs';
 import AIConnections from '../ai-connections.mjs';
 import syntaxValidator from '../syntax-validator.mjs';
+import { mergePolicies, evaluateCommand } from '../util/command-rules.mjs';
 
 /**
  * Implements the core tools for Cadence.
@@ -2429,16 +2430,18 @@ Snippet: ${r.content || r.snippet || ""}`;
         if (sessionObj) {
             sessionObj.commandPolicy = sessionObj.commandPolicy || { whitelist: [], blacklist: [] };
         }
-        const policy = sessionObj?.commandPolicy || { whitelist: [], blacklist: [] };
 
-        // 2. Check Blacklist & Whitelist
-        const isBlacklisted = policy.blacklist.some(rule => cleanCmd.startsWith(rule));
-        if (isBlacklisted) {
+        // 2. Evaluate against merged master (global) + per-session command policy.
+        // Program-level rules (with optional argsPrefix) plus legacy full-command
+        // string rules. Block wins over allow.
+        const masterPolicy = aiManager?.config?.commandPolicy || { allow: [], block: [] };
+        const mergedPolicy = mergePolicies(masterPolicy, sessionObj?.commandPolicy);
+        const evaluation = evaluateCommand(cleanCmd, mergedPolicy);
+
+        if (evaluation.decision === 'blocked') {
             return `Command execution rejected by workspace security policy for command: ${cleanCmd}`;
         }
-
-        const isWhitelisted = policy.whitelist.some(rule => cleanCmd === rule || cleanCmd.startsWith(rule + " "));
-        let isApproved = isWhitelisted;
+        const isApproved = evaluation.decision === 'approved';
 
         // Resolve target working directory across multi-root workspace
         let targetCwd = cwdOverride;

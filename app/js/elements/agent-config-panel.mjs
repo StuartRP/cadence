@@ -3,6 +3,7 @@ import { Button } from './button.mjs';
 import { UIAccordion } from './session-artifacts-panel.mjs';
 import AIConnections from '../ai-connections.mjs';
 import workspaceClient from '../workspace-client.mjs';
+import { openCommandPolicyReviewModal } from '../util/command-policy-review.mjs';
 
 function showUndoToast(message, undoCallback) {
 	const toastEl = document.createElement('div');
@@ -170,7 +171,32 @@ export class AgentConfigPanel extends Block {
 		const forgivenessToggle = createToggleRow("default-forgiveness-mode", "Default Forgiveness Mode", "Commit edits immediately to disk (after validation checks)", "aiForgivenessMode");
 		const openEditsToggle = createToggleRow("default-open-edits-for-review", "Default Open Edits for Review", "Open files in editor for diff review (optional in Forgiveness Mode).", "defaultOpenEditsForReview");
 		createToggleRow("default-allow-sub-agents", "Default Allow Sub-Agents", "Start new sessions with sub-agents allowed.", "defaultAllowSubAgents");
-		createToggleRow("default-allow-run-command", "Default Allow Terminal Commands", "Start new sessions with terminal commands allowed.", "defaultAllowRunCommand");
+		const runCommandRow = createToggleRow("default-allow-run-command", "Default Allow Terminal Commands", "Start new sessions with terminal commands allowed.", "defaultAllowRunCommand");
+		{
+			const cog = new Button();
+			cog.className = "setting-cog-btn";
+			cog.icon = "settings";
+			cog.title = "Review command policies (global)";
+			cog.onclick = (e) => {
+				e.stopPropagation();
+				openCommandPolicyReviewModal({
+					title: "Command Policies",
+					scope: "global",
+					getPolicy: () => {
+						const mgr = window.ui?.aiManager;
+						if (mgr?.config?.commandPolicy) return mgr.config.commandPolicy;
+						mgr.config.commandPolicy = { allow: [], block: [] };
+						return mgr.config.commandPolicy;
+					},
+					onPersist: () => {
+						const mgr = window.ui?.aiManager;
+						if (mgr?.saveCommandPolicy) mgr.saveCommandPolicy(mgr.config.commandPolicy);
+					}
+				});
+			};
+			runCommandRow.wrapper.classList.add("has-cog");
+			runCommandRow.wrapper.appendChild(cog);
+		}
 		createToggleRow("default-auto-milestones", "Default Auto-Milestones on 'done'", "Automatically freeze a checkpoint milestone when the agent finishes a cycle in new sessions.", "defaultAutoMilestones");
 		createToggleRow("default-auto-rollback-on-failures", "Default Auto-Rollback on Edit Failures", "Automatically roll back a file when consecutive edits fail.", "defaultAutoRollbackOnFailures");
 
