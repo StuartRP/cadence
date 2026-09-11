@@ -1524,6 +1524,22 @@ ui-editor-holder .artifacts-accordion-container .ace_editor,
     pointer-events: none;
 }
 
+/* Cog (review) button appended to a toggle row's end */
+.artifacts-accordion-container .toggle-row.has-cog {
+    justify-content: space-between;
+}
+
+.artifacts-accordion-container .setting-cog-btn {
+    flex-shrink: 0;
+    margin-top: 2px;
+    opacity: 0.55;
+    transition: opacity 0.15s ease;
+}
+
+.artifacts-accordion-container .setting-cog-btn:hover {
+    opacity: 1;
+}
+
 /* Number input rows: input first, then label/description */
 .artifacts-accordion-container .number-input-row {
     align-items: center;

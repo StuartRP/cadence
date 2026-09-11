@@ -6,6 +6,8 @@ import workspaceClient from "./workspace-client.mjs"
 import { getAgentDirectives } from "./ai-manager-agent-prompt.mjs"
 import agentTools from "./agent/agent-tools.mjs"
 import { Agent } from "./agent/agent.mjs"
+	import { normalizePolicy, mergePolicies, evaluateCommand, segmentMatchesRule, segmentPrograms } from "./util/command-rules.mjs"
+import { parseCommandLine, classifyProgram } from "./util/command-parser.mjs"
 export const MAX_RECENT_MESSAGES_TO_PRESERVE = 5
 export const MAX_DIRECT_CYCLE_SUMMARIES = 3
 
@@ -1587,124 +1589,46 @@ class AIManagerHistory {
 			element.append(header, cmdBox);
 
 			if (message.status === "pending") {
-				const actions = new Block();
-				actions.className = "agent-cmd-actions";
-				actions.style.display = "flex";
-				actions.style.flexDirection = "column";
-				actions.style.gap = "8px";
-				actions.style.marginTop = "8px";
-
-				const noteInput = document.createElement("input");
-				noteInput.type = "text";
-				noteInput.placeholder = "Optional feedback or reason for refusal...";
-				noteInput.className = "agent-query-input";
-				noteInput.style.width = "100%";
-
-				const btnRow = new Block();
-				btnRow.style.display = "flex";
-				btnRow.style.gap = "8px";
-				btnRow.style.justifyContent = "flex-end";
-
-				const rememberLabel = document.createElement("label");
-				rememberLabel.style.display = "flex";
-				rememberLabel.style.alignItems = "center";
-				rememberLabel.style.gap = "4px";
-				rememberLabel.style.fontSize = "12px";
-				rememberLabel.style.marginRight = "auto";
-				rememberLabel.innerHTML = `<input type="checkbox" id="chk_${message.id}"> Always allow in this session`;
-
 				const targetSessionId = message.subSessionId || this.manager.activeSessionId;
 
-				const denyBtn = new Button("Deny");
-				denyBtn.className = "theme-button danger";
-				denyBtn.onclick = async () => {
-					actions.style.display = "none";
-					const userNote = noteInput.value.trim();
-					message.status = "rejected";
-					message.userNote = userNote;
+				// Re-parse (lean storage: the message only carries the command string).
+				const parsed = parseCommandLine(message.command);
+				const programs = parsed.programs || [];
 
-					const activeSession = this.manager.runningSessions.get(targetSessionId)?.instance?.session ||
-					                      (this.manager.activeSessionId === targetSessionId ? this.manager.activeSession : await workspaceClient.getSession(targetSessionId));
-					if (activeSession) {
-						delete activeSession.pendingQueryId;
-						const toolResponseMessage = {
-							id: crypto.randomUUID(),
-							role: "user",
-							type: "tool_response",
-							content: `[Tool Response: run_command]\n\nCommand execution rejected by user.${userNote ? ` User feedback: ${userNote}` : ''}`,
-							timestamp: Date.now()
-						};
-						activeSession.messages.push(toolResponseMessage);
-						activeSession.lastModified = Date.now();
-						await workspaceClient.setSession(targetSessionId, activeSession);
-					}
-
-					this.render();
-
-					// Resume agent
-					this.manager.setSessionProcessing(targetSessionId, true, 'agent', null);
-					this.manager._updateTabStatus(targetSessionId, "running");
-					const agent = new Agent(this.manager, activeSession, this.manager.ai);
-					await agent.run(null, null);
-				};
-
-				const approveBtn = new Button("Approve");
-				approveBtn.className = "theme-button primary";
-				approveBtn.onclick = async () => {
-					actions.style.display = "none";
-					const chk = document.getElementById(`chk_${message.id}`);
-					message.status = "approved";
-
-					const activeSession = this.manager.runningSessions.get(targetSessionId)?.instance?.session ||
-					                      (this.manager.activeSessionId === targetSessionId ? this.manager.activeSession : await workspaceClient.getSession(targetSessionId));
-
-					if (activeSession) {
-						delete activeSession.pendingQueryId;
-						if (chk && chk.checked) {
-							activeSession.commandPolicy = activeSession.commandPolicy || { whitelist: [], blacklist: [] };
-							if (!activeSession.commandPolicy.whitelist.includes(message.command)) {
-								activeSession.commandPolicy.whitelist.push(message.command);
-							}
+				// JIT purge: a newer approval request supersedes any *older* pending
+				// approval cards in the same session — they become inert status tags.
+				// (Only earlier messages are superseded; a still-pending card that
+				// appears later in history is the one that supersedes this one.)
+				const owningSession = this._getOwningSessionForMessage(message);
+				if (owningSession && Array.isArray(owningSession.messages)) {
+					const idx = owningSession.messages.indexOf(message);
+					let supersededAny = false;
+					for (let i = 0; i < idx; i++) {
+						const m = owningSession.messages[i];
+						if (m.type === "agent_command_approval" && m.status === "pending") {
+							m.status = "superseded";
+							supersededAny = true;
 						}
-						activeSession.lastModified = Date.now();
-						await workspaceClient.setSession(targetSessionId, activeSession);
 					}
-
-					this.render();
-
-					// Execute the approved command
-					this.manager.setSessionProcessing(targetSessionId, true, 'agent', null);
-					this.manager._updateTabStatus(targetSessionId, "running");
-
-					const cmdResult = await agentTools.executeTerminalCommand(message.command, message.cwd, targetSessionId);
-
-					if (activeSession) {
-						const toolResponseMessage = {
-							id: crypto.randomUUID(),
-							role: "user",
-							type: "tool_response",
-							content: `[Tool Response: run_command]\n\n${cmdResult}`,
-							timestamp: Date.now()
-						};
-						activeSession.messages.push(toolResponseMessage);
-						activeSession.lastModified = Date.now();
-						await workspaceClient.setSession(targetSessionId, activeSession);
+					if (supersededAny) {
+						owningSession.lastModified = Date.now();
+						void workspaceClient.setSession(targetSessionId, owningSession);
 					}
+				}
 
-					this.render();
-
-					// Resume agent
-					const agent = new Agent(this.manager, activeSession, this.manager.ai);
-					await agent.run(null, null);
-				};
-
-				btnRow.append(rememberLabel, denyBtn, approveBtn);
-				actions.append(noteInput, btnRow);
-				element.append(actions);
+				if (programs.length === 0) {
+					// Fallback: the command could not be parsed into programs —
+					// keep the legacy single Approve/Deny card.
+					this._buildLegacyApprovalActions(element, message, targetSessionId);
+				} else {
+					this._buildPerSegmentApprovalCard(element, message, targetSessionId, parsed);
+				}
 			} else {
 				const statusTag = new Block();
 				statusTag.className = `agent-query-answer answered ${message.status}`;
-				statusTag.textContent = message.status === "approved" ? "✓ Approved by user" : "✗ Denied by user";
+				statusTag.textContent = message.status === "approved" ? "✓ Approved by user"
+					: message.status === "superseded" ? "⊘ Superseded by a newer approval request"
+					: "✗ Denied by user";
 				element.append(statusTag);
 			}
 		} else if (message.type === "agent_command_output") {
@@ -1853,6 +1777,339 @@ class AIManagerHistory {
 
 		expanderBlock.append(header, contentDiv);
 		return expanderBlock;
+	}
+
+	// ---------------------------------------------------------------------
+	// Terminal command approval — per-segment (program-level) policy UI
+	// ---------------------------------------------------------------------
+
+	/**
+	 * Returns the in-memory session whose messages array contains the given
+	 * approval message (sub-session if it carries a subSessionId, else the
+	 * active session). Returns null if the session is not currently in memory.
+	 */
+	_getOwningSessionForMessage(message) {
+		const targetSessionId = message.subSessionId || this.manager.activeSessionId;
+		const running = this.manager.runningSessions.get(targetSessionId);
+		if (running && running.instance?.session) return running.instance.session;
+		if (this.manager.activeSessionId === targetSessionId) return this.manager.activeSession;
+		return null;
+	}
+
+	/**
+	 * Resolves the session object for a given session id (running sub-session,
+	 * the active session, or fetched from the workspace).
+	 */
+	async _resolveApprovalSession(targetSessionId) {
+		return this.manager.runningSessions.get(targetSessionId)?.instance?.session ||
+			(this.manager.activeSessionId === targetSessionId ? this.manager.activeSession : await workspaceClient.getSession(targetSessionId));
+	}
+
+	/**
+	 * Normalizes a session's commandPolicy to the canonical { allow, block }
+	 * shape (tolerating the legacy { whitelist, blacklist } shape).
+	 */
+	_normalizeSessionPolicy(session) {
+		const p = session?.commandPolicy || {};
+		const allow = Array.isArray(p.allow) ? p.allow : (Array.isArray(p.whitelist) ? p.whitelist : []);
+		const block = Array.isArray(p.block) ? p.block : (Array.isArray(p.blacklist) ? p.blacklist : []);
+		session.commandPolicy = { allow, block };
+		return session.commandPolicy;
+	}
+
+	/**
+	 * Adds a program-level rule to a policy list, deduping by program name.
+	 */
+	_pushProgramRule(list, program) {
+		const exists = list.some(r => (r && typeof r === "object" && r.program ? r.program === program : r === program));
+		if (!exists) list.push({ program });
+	}
+
+	/**
+	 * Determines the preloaded policy selector value for a program based on the
+	 * merged master + session policies.
+	 */
+	_initialPolicyValue(program, master, session) {
+		const inList = (list, name) => (list || []).some(r =>
+			(typeof r === "string" ? r === name : r && typeof r === "object" && r.program === name));
+		const m = normalizePolicy(master);
+		const s = normalizePolicy(session);
+		if (inList(s.block, program)) return "block_session";
+		if (inList(m.block, program)) return "block_always";
+		if (inList(s.allow, program)) return "allow_session";
+		if (inList(m.allow, program)) return "allow_always";
+		return "allow_once";
+	}
+
+	/**
+	 * Builds the legacy single Approve/Deny card, used as a fallback when a
+	 * command cannot be parsed into programs.
+	 */
+	_buildLegacyApprovalActions(element, message, targetSessionId) {
+		const actions = new Block();
+		actions.className = "agent-cmd-actions";
+		actions.style.display = "flex";
+		actions.style.flexDirection = "column";
+		actions.style.gap = "8px";
+		actions.style.marginTop = "8px";
+
+		const noteInput = document.createElement("input");
+		noteInput.type = "text";
+		noteInput.placeholder = "Optional feedback or reason for refusal...";
+		noteInput.className = "agent-query-input";
+		noteInput.style.width = "100%";
+
+		const btnRow = new Block();
+		btnRow.style.display = "flex";
+		btnRow.style.gap = "8px";
+		btnRow.style.justifyContent = "flex-end";
+
+		const denyBtn = new Button("Deny");
+		denyBtn.className = "theme-button danger";
+		denyBtn.onclick = async () => {
+			actions.style.display = "none";
+			message.status = "rejected";
+
+			const activeSession = await this._resolveApprovalSession(targetSessionId);
+			if (activeSession) {
+				delete activeSession.pendingQueryId;
+				activeSession.messages.push({
+					id: crypto.randomUUID(),
+					role: "user",
+					type: "tool_response",
+					content: `[Tool Response: run_command]\n\nCommand execution rejected by user.`,
+					timestamp: Date.now()
+				});
+				activeSession.lastModified = Date.now();
+				await workspaceClient.setSession(targetSessionId, activeSession);
+			}
+
+			this.render();
+			this.manager.setSessionProcessing(targetSessionId, true, 'agent', null);
+			this.manager._updateTabStatus(targetSessionId, "running");
+			const agent = new Agent(this.manager, activeSession, this.manager.ai);
+			await agent.run(null, null);
+		};
+
+		const approveBtn = new Button("Approve");
+		approveBtn.className = "theme-button primary";
+		approveBtn.onclick = async () => {
+			actions.style.display = "none";
+
+			const activeSession = await this._resolveApprovalSession(targetSessionId);
+			if (activeSession) {
+				delete activeSession.pendingQueryId;
+				activeSession.lastModified = Date.now();
+				await workspaceClient.setSession(targetSessionId, activeSession);
+			}
+
+			// Defense-in-depth: honor persisted block rules even on the legacy
+			// card (a legacy { command } block rule can match an unparseable
+			// command). Refuse to execute if the merged policy blocks it.
+			const merged = mergePolicies(this.manager.config?.commandPolicy || { allow: [], block: [] }, activeSession ? this._normalizeSessionPolicy(activeSession) : null);
+			const policyBlocked = evaluateCommand(message.command, merged).decision === "blocked";
+			message.status = policyBlocked ? "rejected" : "approved";
+
+			this.render();
+			this.manager.setSessionProcessing(targetSessionId, true, 'agent', null);
+			this.manager._updateTabStatus(targetSessionId, "running");
+
+			const responseText = policyBlocked
+				? `Command execution rejected by workspace security policy (a persisted block rule applies) for command: ${message.command}`
+				: await agentTools.executeTerminalCommand(message.command, message.cwd, targetSessionId);
+
+			if (activeSession) {
+				activeSession.messages.push({
+					id: crypto.randomUUID(),
+					role: "user",
+					type: "tool_response",
+					content: `[Tool Response: run_command]\n\n${responseText}`,
+					timestamp: Date.now()
+				});
+				activeSession.lastModified = Date.now();
+				await workspaceClient.setSession(targetSessionId, activeSession);
+			}
+
+			this.render();
+			const agent = new Agent(this.manager, activeSession, this.manager.ai);
+			await agent.run(null, null);
+		};
+
+		btnRow.append(denyBtn, approveBtn);
+		actions.append(noteInput, btnRow);
+		element.append(actions);
+	}
+
+	/**
+	 * Builds the per-segment approval card: one row per detected program with a
+	 * risk chip and a policy selector, plus a single Ok button.
+	 */
+	_buildPerSegmentApprovalCard(element, message, targetSessionId, parsed) {
+		const session = this.manager.runningSessions.get(targetSessionId)?.instance?.session ||
+			(this.manager.activeSessionId === targetSessionId ? this.manager.activeSession : null);
+		const sessionPolicy = session ? this._normalizeSessionPolicy(session) : { allow: [], block: [] };
+		const masterPolicy = this.manager.config?.commandPolicy || { allow: [], block: [] };
+
+		const card = new Block();
+		card.className = "agent-cmd-program-list";
+		card.style.display = "flex";
+		card.style.flexDirection = "column";
+		card.style.gap = "6px";
+
+		const selectOptions = [
+			["allow_once", "Allow Once"],
+			["allow_session", "Allow this session"],
+			["allow_always", "Allow always"],
+			["block_once", "Block once"],
+			["block_session", "Block this session"],
+			["block_always", "Block always"]
+		];
+
+		const selectorRefs = new Map();
+		for (const program of parsed.programs) {
+			const row = new Block();
+			row.className = "agent-cmd-program-row";
+
+			// Top-level segments carry their own risk; recursively-extracted
+			// programs (find -exec, xargs, sh -c, $()) have no segment of their
+			// own, so classify them directly (unknown → high risk).
+			const seg = parsed.segments.find(s => s.program === program);
+			const { category: risk, reason } = seg ? { category: seg.risk, reason: seg.riskReason } : classifyProgram(program);
+			const chip = new Inline();
+			chip.className = `agent-cmd-risk-chip risk-${risk}`;
+			chip.textContent = risk.toUpperCase();
+			chip.title = reason;
+
+			const name = new Inline();
+			name.className = "agent-cmd-program-name";
+			name.textContent = program;
+
+			const sel = document.createElement("select");
+			sel.className = "agent-cmd-policy-select";
+			for (const [value, label] of selectOptions) {
+				const opt = document.createElement("option");
+				opt.value = value;
+				opt.textContent = label;
+				sel.appendChild(opt);
+			}
+			sel.value = this._initialPolicyValue(program, masterPolicy, sessionPolicy);
+			selectorRefs.set(program, sel);
+
+			row.append(chip, name, sel);
+			card.append(row);
+		}
+
+		if (parsed.warnings && parsed.warnings.length > 0) {
+			const warnBlock = new Block();
+			warnBlock.className = "agent-cmd-warnings";
+			for (const w of parsed.warnings) {
+				const line = new Inline();
+				line.className = "agent-cmd-warning-line";
+				line.textContent = "⚠ " + w;
+				warnBlock.append(line);
+			}
+			card.append(warnBlock);
+		}
+
+		const okRow = new Block();
+		okRow.className = "agent-cmd-ok-row";
+		const okBtn = new Button("Ok");
+		okBtn.className = "theme-button primary";
+		okBtn.onclick = async () => {
+			okBtn.disabled = true;
+
+			const decisions = new Map();
+			for (const program of parsed.programs) {
+				decisions.set(program, selectorRefs.get(program).value);
+			}
+
+			const activeSession = await this._resolveApprovalSession(targetSessionId);
+			const master = this.manager.config?.commandPolicy || { allow: [], block: [] };
+			const sp = activeSession ? this._normalizeSessionPolicy(activeSession) : { allow: [], block: [] };
+
+			const blockedPrograms = [];
+			for (const [program, choice] of decisions) {
+				// Persistence: only session/always choices write a rule.
+				// *_once choices are instance-only (no rule written).
+				if (choice === "allow_session") this._pushProgramRule(sp.allow, program);
+				else if (choice === "allow_always") this._pushProgramRule(master.allow, program);
+				else if (choice === "block_session") this._pushProgramRule(sp.block, program);
+				else if (choice === "block_always") this._pushProgramRule(master.block, program);
+				// This-instance decision: ANY block choice (incl. block_once)
+				// rejects the command for this run.
+				if (choice.startsWith("block")) blockedPrograms.push(program);
+			}
+
+			// Persist policy changes.
+			if (activeSession) {
+				delete activeSession.pendingQueryId;
+				activeSession.lastModified = Date.now();
+				await workspaceClient.setSession(targetSessionId, activeSession);
+			}
+			this.manager.saveCommandPolicy(master);
+
+			// Re-evaluate against the merged policy (which now includes the rules
+			// just written above). This is the authoritative gate: it honors any
+			// pre-existing persisted block/allow rules, not just the UI choices.
+			// Block wins over allow.
+			const merged = mergePolicies(this.manager.config?.commandPolicy || master, activeSession ? this._normalizeSessionPolicy(activeSession) : null);
+			const policyBlocked = evaluateCommand(message.command, merged).decision === "blocked";
+
+			const isRejected = blockedPrograms.length > 0 || policyBlocked;
+			if (policyBlocked && blockedPrograms.length === 0) {
+				// The user made no explicit block choice, but a persisted rule
+				// blocks the command — report the programs the policy blocks.
+				// Enumerate top-level AND nested-substitution programs so a block
+				// rule on a nested program (e.g. `wc` in `total=$(cat | wc)`) is
+				// reported, not just the top-level program.
+				const parsedForBlock = parseCommandLine(message.command);
+				for (const rule of merged.block) {
+					if (!rule.program) continue; // legacy { command } rule: no program to report
+					const target = rule.program.toLowerCase();
+					for (const seg of parsedForBlock.segments) {
+						if (segmentMatchesRule(seg, rule, message.command) &&
+							segmentPrograms(seg).includes(target) &&
+							!blockedPrograms.includes(target)) {
+							blockedPrograms.push(target);
+						}
+					}
+				}
+			}
+
+			message.status = isRejected ? "rejected" : "approved";
+
+			this.render();
+			this.manager.setSessionProcessing(targetSessionId, true, 'agent', null);
+			this.manager._updateTabStatus(targetSessionId, "running");
+
+			let responseText;
+			if (blockedPrograms.length > 0) {
+				responseText = `Command execution rejected by security policy. The following programs are not allowed: ${blockedPrograms.join(", ")}.`;
+			} else {
+				const cmdResult = await agentTools.executeTerminalCommand(message.command, message.cwd, targetSessionId, message.timeoutMs);
+				responseText = cmdResult;
+			}
+
+			if (activeSession) {
+				activeSession.messages.push({
+					id: crypto.randomUUID(),
+					role: "user",
+					type: "tool_response",
+					content: `[Tool Response: run_command]\n\n${responseText}`,
+					timestamp: Date.now()
+				});
+				activeSession.lastModified = Date.now();
+				await workspaceClient.setSession(targetSessionId, activeSession);
+			}
+
+			this.render();
+			const agent = new Agent(this.manager, activeSession, this.manager.ai);
+			await agent.run(null, null);
+		};
+
+		okRow.append(okBtn);
+		card.append(okRow);
+		element.append(card);
 	}
 
 	_escapeHtml(unsafe) {
