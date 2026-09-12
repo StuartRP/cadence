@@ -1822,9 +1822,9 @@ class AIManagerHistory {
 
 		/**
 		 * Adds a program-level rule to a policy list, deduping by program name.
-		 * If `subs` (a first-arg string) is provided and no rule exists yet, the
-		 * new rule carries a subs filter so only that subcommand is matched
-		 * (e.g. allow `git status`).
+		 * If `subs` (a first-arg string or an array of first-args) is provided
+		 * and no rule exists yet, the new rule carries a subs filter so only
+		 * those subcommands are matched (e.g. allow `git status`).
 		 *
 		 * Never narrows an existing rule:
 		 * - Broad (subs-less) rule already present: it already covers this
@@ -1837,13 +1837,23 @@ class AIManagerHistory {
 		 *   rather than replacing or dropping it.
 		 */
 		_pushProgramRule(list, program, subs) {
-			const subsArr = (subs && typeof subs === "string" && subs.trim()) ? [subs.trim().toLowerCase()] : null;
+			// `subs` may be a single first-arg string or an array of first-args
+			// (one "add <sub>" checkbox per distinct subcommand on the approval
+			// card). Normalize to a deduped lowercase array, or null when no
+			// sub context was provided.
+			let subsArr = null;
+			if (typeof subs === "string" && subs.trim()) subsArr = [subs.trim().toLowerCase()];
+			else if (Array.isArray(subs)) {
+				subsArr = [...new Set(subs.map(s => String(s).trim().toLowerCase()).filter(Boolean))];
+				if (subsArr.length === 0) subsArr = null;
+			}
 			const existing = list.find(r => (r && typeof r === "object" && r.program ? r.program === program : r === program));
 			if (existing && typeof existing === "object" && existing.program) {
 				if (Array.isArray(existing.subs) && existing.subs.length > 0 && subsArr) {
-					// Sub-filtered rule: extend (union) with the new sub.
-					if (!existing.subs.includes(subsArr[0])) {
-						existing.subs = [...existing.subs, ...subsArr].sort((a, b) => a.localeCompare(b));
+					// Sub-filtered rule: extend (union) with the new subs.
+					const toAdd = subsArr.filter(s => !existing.subs.includes(s));
+					if (toAdd.length > 0) {
+						existing.subs = [...existing.subs, ...toAdd].sort((a, b) => a.localeCompare(b));
 					}
 				}
 				// Broad rule (or no new sub context): already covers this
@@ -1853,7 +1863,7 @@ class AIManagerHistory {
 			const rule = { program };
 			if (subsArr) rule.subs = subsArr;
 			list.push(rule);
-	}
+		}
 
 	/**
 	 * Determines the preloaded policy selector value for a program based on the
@@ -2060,15 +2070,28 @@ class AIManagerHistory {
 		card.style.flexDirection = "column";
 		card.style.gap = "6px";
 
+		// Distinct first-args (subcommands) observed per program, in first-
+		// seen order. Each one not already covered by a policy allow rule
+		// gets its own "add <sub>" checkbox on the program row.
+		const subArgsByProgram = new Map();
+		for (const program of parsed.programs) {
+			const args = [];
+			const seen = new Set();
+			for (const s of parsed.segments) {
+				if (s.program !== program || !s.args || s.args.length === 0) continue;
+				const a = s.args[0];
+				if (!seen.has(a)) { seen.add(a); args.push(a); }
+			}
+			subArgsByProgram.set(program, args);
+		}
 		// Tokenized command snippet: programs and subcommands are highlighted
 		// (subdued by default; see ai-chat.css) so the user can see exactly
 		// what will run before deciding. The subcommand tokens that will get
-		// a "only <sub>" checkbox are tagged (data-subtoken) so hovering the
+		// an "add <sub>" checkbox are tagged (data-subtoken) so hovering the
 		// checkbox restores the exact token to full colour + bold.
 		const subTokens = new Map();
-		for (const program of parsed.programs) {
-			const s = parsed.segments.find(x => x.program === program);
-			if (s && s.args && s.args.length > 0) subTokens.set(s.args[0], program);
+		for (const [program, args] of subArgsByProgram) {
+			for (const a of args) subTokens.set(a, program);
 		}
 		card.append(this._buildAnnotatedSnippet(message.command, subTokens));
 
@@ -2082,8 +2105,9 @@ class AIManagerHistory {
 		];
 
 		const selectorRefs = new Map();
-		// Per-program "limit to this subcommand" checkbox refs (shown whenever
-		// the program has a first-arg context; only honored for new programs).
+		// Per-program "add <sub>" checkbox refs: one per distinct first-arg
+		// not already in the policy's allow list (checked = include that sub
+		// in the rule; only honored for new programs).
 		const subFlagRefs = new Map();
 		for (const program of parsed.programs) {
 			const row = new Block();
@@ -2129,38 +2153,53 @@ class AIManagerHistory {
 			// Focus new programs: rows whose program already has a rule in the
 			// merged policy are dimmed so the ones needing a decision stand out.
 			if (!isNewProgram) row.classList.add("agent-cmd-row-dimmed");
-			// "Limit to this subcommand" flag: shown whenever the invocation
-			// carries a first-arg (subcommand) context — including programs that
-			// already have a subs filter (so a new sub can be added to it). For
-			// NEW programs it decides whether the written rule is subs-limited
-			// (checked) or broad (unchecked); for programs with an existing rule
-			// the handler unions the sub instead. Hidden when there is no
-			// first-arg context.
-			const firstArg = seg && seg.args && seg.args.length > 0 ? seg.args[0] : null;
-			let flagLabel = null;
-			if (firstArg) {
+			// "Add <sub>" flags: one checkbox per DISTINCT first-arg observed
+			// for this program, skipping subs already covered by a policy allow
+			// rule (allow or block) — those are already audited via the subs
+			// chips above and the rule handler unions them into the existing
+			// filter anyway. For NEW programs the checked subs decide whether
+			// the written rule is subs-limited (any checked) or broad (none);
+			// for programs with an existing rule the handler unions each checked
+			// sub into the filter. No first-arg context -> no flags.
+			const firstArgs = subArgsByProgram.get(program) || [];
+			const existingSubs = new Set();
+			for (const kind of ["allow", "block"]) {
+				for (const list of [masterPolicy, sessionPolicy]) {
+					for (const r of list[kind] || []) {
+						if (r && r.program === program && Array.isArray(r.subs)) {
+							for (const s of r.subs) existingSubs.add(s);
+						}
+					}
+				}
+			}
+			const flagRefs = [];
+			for (const sub of firstArgs) {
+				if (existingSubs.has(sub)) continue; // already in the policy
 				const flag = document.createElement("input");
 				flag.type = "checkbox";
 				flag.className = "agent-cmd-limit-flag";
+				flag.dataset.sub = sub; // submit handler maps checked flags → subs
 				flag.title = isNewProgram
-					? `Checked: the rule only applies to \`${program} ${firstArg}\`. Unchecked: the rule applies to every invocation of \`${program}\`.`
-					: `Checked: \`${firstArg}\` is added to the existing ${program} subcommand filter. Unchecked: the existing filter is left unchanged.`;
-				flagLabel = document.createElement("label");
+					? `Checked: \`${program} ${sub}\` is included in the rule. Unchecked: \`${program} ${sub}\` is not (other checked subs or a broad rule still apply).`
+					: `Checked: \`${sub}\` is added to the existing ${program} subcommand filter. Unchecked: the existing filter is left unchanged.`;
+				const flagLabel = document.createElement("label");
 				flagLabel.className = "agent-cmd-limit-flag-label";
 				flagLabel.title = flag.title;
 				// Visual binding: hovering/focusing this checkbox highlights the
 				// matching subcommand token in the tokenized snippet (full
 				// colour + bold), so the user sees exactly which token the rule
 				// would apply to.
-				this._bindSubtokenHover(card, flagLabel, firstArg);
+				this._bindSubtokenHover(card, flagLabel, sub);
 				const flagText = document.createElement("span");
 				flagText.className = "agent-cmd-limit-flag-text";
-				flagText.textContent = ` add ${firstArg}`;
+				flagText.textContent = ` add ${sub}`;
 				flagLabel.append(flag, flagText);
 				// Register the checkbox (default unchecked) so the Ok handler can
 				// read the current state at submit time.
-				subFlagRefs.set(program, flag);
+				flagRefs.push(flag);
+				row.append(flagLabel);
 			}
+			if (flagRefs.length > 0) subFlagRefs.set(program, flagRefs);
 
 			const sel = document.createElement("select");
 			sel.className = "agent-cmd-policy-select";
@@ -2174,7 +2213,6 @@ class AIManagerHistory {
 			selectorRefs.set(program, sel);
 
 			row.append(dot, name, subsCell);
-			if (flagLabel) row.append(flagLabel);
 			row.append(sel);
 			card.append(row);
 		}
@@ -2213,9 +2251,8 @@ class AIManagerHistory {
 			// from nested substitutions have no segment/args context -> null.
 			const subsContext = new Map();
 			for (const program of parsed.programs) {
-				const seg = parsed.segments.find(s => s.program === program);
-				const first = seg && seg.args && seg.args.length > 0 ? seg.args[0] : null;
-				subsContext.set(program, first);
+				const args = subArgsByProgram.get(program) || [];
+				subsContext.set(program, args.length > 0 ? args[0] : null);
 			}
 
 			const blockedPrograms = [];
@@ -2225,18 +2262,30 @@ class AIManagerHistory {
 				// When the program has a first-arg context, the rule carries a
 				// subs filter so only that subcommand is allowed/blocked.
 				let subs = subsContext.get(program);
-				// The "only <sub>" checkbox decides the rule shape for NEW
-				// programs: checked → subs-limited rule, unchecked → broad rule.
-				// For programs with an existing rule the default first-arg
-				// behavior applies (the handler unions the sub into the existing
-				// filter), so the checkbox is ignored there.
-				const flag = subFlagRefs.get(program);
-				if (flag) {
+				// Per-sub "add <sub>" checkboxes (one per distinct first-arg not
+				// already in the policy's allow list). For NEW programs they
+				// decide the rule shape: any checked → subs-limited rule to the
+				// checked subs, none checked → broad rule. For programs with an
+				// existing rule each checked sub is unioned into the filter
+				// (unchecked subs are left unchanged), so the default first-arg
+				// behavior is preserved when no checkbox is present.
+				const flags = subFlagRefs.get(program);
+				if (flags && flags.length > 0) {
 					const hasExistingRule = master.allow.some(r => r.program === program) ||
 						master.block.some(r => r.program === program) ||
 						sp.allow.some(r => r.program === program) ||
 						sp.block.some(r => r.program === program);
-					if (!hasExistingRule) subs = flag.checked ? subs : null;
+					const checked = flags.filter(f => f.checked).map(f => f.dataset.sub).filter(Boolean);
+					if (!hasExistingRule) {
+						// Any checked → subs-limited rule to the checked subs;
+						// none checked → broad rule.
+						subs = checked.length > 0 ? checked : null;
+					} else if (checked.length > 0) {
+						// Existing rule: union the checked subs into its filter
+						// (a subs-less existing rule is left broad — never
+						// narrow). No checked subs -> leave the rule unchanged.
+						subs = checked;
+					}
 				}
 				if (choice === "allow_session") this._pushProgramRule(sp.allow, program, subs);
 				else if (choice === "allow_always") this._pushProgramRule(master.allow, program, subs);
