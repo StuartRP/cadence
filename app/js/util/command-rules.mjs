@@ -8,8 +8,18 @@
  * Rule model
  * ----------
  * A rule is one of:
- *   { program: string, argsPrefix?: string }   — program-level rule
+ *   { program: string, argsPrefix?: string, subs?: string[] } — program-level rule
  *   { command: string }                          — legacy full-command-string rule
+ *
+ * `subs` is an optional FILTER of acceptable first-args (subcommands) for the
+ * program. When present, a program rule only matches a segment whose first
+ * argument is one of `subs` (case-insensitive). This lets a user allow
+ * `git status` / `git log` while leaving `git reset` / `git commit` to
+ * escalate, or allow `node -c` while leaving bare `node ...` to escalate.
+ * Absent/empty `subs` = no filter (matches all invocations, current behavior).
+ * `subs` coexists with `argsPrefix` (both must hold when both are present).
+ * `subs` constrains only the top-level program (its first arg), not programs
+ * nested inside command substitutions (which have no args context).
  *
  * Policy shape (canonical):
  *   { allow: Rule[], block: Rule[] }
@@ -33,7 +43,7 @@ import { parseCommandLine, extractPrograms, classifyProgram } from "./command-pa
  * Sanitizes a single rule entry into the canonical rule object, or null if it
  * is not a usable rule.
  * @param {any} entry
- * @returns {{ program?: string, argsPrefix?: string, command?: string }|null}
+ * @returns {{ program?: string, argsPrefix?: string, subs?: string[], command?: string }|null}
  */
 function normalizeRule(entry) {
     if (!entry) return null;
@@ -54,6 +64,15 @@ function normalizeRule(entry) {
         }
         if (typeof entry.command === "string" && entry.command.trim()) {
             out.command = entry.command.trim();
+        }
+        // Optional subcommand filter: a list of acceptable first-args (e.g.
+        // { program: "git", subs: ["status", "log"] }). Trimmed + lowercased,
+        // empties dropped; only kept when non-empty.
+        if (Array.isArray(entry.subs)) {
+            const subs = entry.subs
+                .filter(s => typeof s === "string" && s.trim())
+                .map(s => s.trim().toLowerCase());
+            if (subs.length > 0) out.subs = subs;
         }
         return (out.program || out.command) ? out : null;
     }
@@ -122,7 +141,10 @@ export function programRuleForCommand(command) {
  * Returns true if a segment matches a rule.
  * - Program rule: segment.program === rule.program (case-insensitive), and if
  *   rule.argsPrefix is set, the segment's args joined by spaces must start with
- *   that prefix.
+ *   that prefix, and if rule.subs is set, the segment's first arg must be one
+ *   of rule.subs (case-insensitive). A rule with argsPrefix or subs only
+ *   constrains the TOP-LEVEL program; programs nested inside command
+ *   substitutions match by name only when the rule has neither.
  * - Legacy command rule: the full command string equals rule.command, or starts
  *   with rule.command + " ".
  * @param {object} segment
@@ -150,6 +172,80 @@ export function segmentPrograms(segment) {
     return [...progs];
 }
 
+/**
+ * Collects the distinct `subs` (acceptable first-args) carried by the allow and
+ * block rules for a program, for auditability in the approval card and the
+ * review table. A program can have an allow rule with subs (e.g. allow
+ * `git status`) AND a block rule with subs (e.g. block `git reset`), so the
+ * two are reported separately.
+ * @param {string} program
+ * @param {object} policy canonical or legacy policy
+ * @returns {{ allowSubs: string[]|null, blockSubs: string[]|null }}
+ */
+export function subChipsFor(program, policy) {
+    const norm = normalizePolicy(policy);
+    const p = String(program).toLowerCase();
+    const allowSubs = new Set();
+    const blockSubs = new Set();
+    for (const r of norm.allow) {
+        if (r.program === p && Array.isArray(r.subs)) r.subs.forEach(s => allowSubs.add(s));
+    }
+    for (const r of norm.block) {
+        if (r.program === p && Array.isArray(r.subs)) r.subs.forEach(s => blockSubs.add(s));
+    }
+    const sorted = a => [...a].sort((x, y) => x.localeCompare(y));
+    return {
+        allowSubs: allowSubs.size ? sorted(allowSubs) : null,
+        blockSubs: blockSubs.size ? sorted(blockSubs) : null
+    };
+}
+
+/**
+ * Returns true if a program rule covers a *specific program* within a segment.
+ * Used for per-program coverage in isApproved and for top-level matching in
+ * segmentMatchesRule.
+ *
+ * - The rule's program must equal `prog` (case-insensitive).
+ * - If the rule has `argsPrefix`, it constrains the TOP-LEVEL program's args
+ *   (only meaningful when `prog` is the segment's top-level program).
+ * - If the rule has `subs`, it constrains the TOP-LEVEL program's first arg
+ *   (only meaningful when `prog` is the segment's top-level program). A
+ *   nested-substitution program has no args context, so a `subs`-constrained
+ *   rule does NOT cover it.
+ * @param {object} segment
+ * @param {object} rule
+ * @param {string} prog the program name to check (lowercase)
+ * @returns {boolean}
+ */
+export function programCoversSegment(segment, rule, prog) {
+    if (!segment || !rule || !rule.program) return false;
+    if (rule.program.toLowerCase() !== prog) return false;
+
+    const isTopLevel = prog === (segment.program || "").toLowerCase();
+    if (isTopLevel) {
+        if (rule.argsPrefix) {
+            const argsStr = (segment.args || []).join(" ");
+            if (!argsStr.startsWith(rule.argsPrefix)) return false;
+        }
+        if (Array.isArray(rule.subs) && rule.subs.length > 0) {
+            const first = (segment.args || [])[0];
+            if (first === undefined || first === null || first === "") return false;
+            if (!rule.subs.includes(String(first).toLowerCase())) return false;
+        }
+        return true;
+    }
+
+    // `prog` is a program nested inside a command substitution (not the
+    // segment's top-level program). A rule with `argsPrefix` or `subs`
+    // constrains the top-level program's args, so it does NOT cover nested
+    // programs (they have no args context). A subs-less rule covers nested
+    // programs by name.
+    if (rule.argsPrefix || (Array.isArray(rule.subs) && rule.subs.length > 0)) {
+        return false;
+    }
+    return true;
+}
+
 export function segmentMatchesRule(segment, rule, fullCommand) {
     if (!segment || !rule) return false;
 
@@ -157,17 +253,15 @@ export function segmentMatchesRule(segment, rule, fullCommand) {
         const target = rule.program.toLowerCase();
         const segProgram = (segment.program || "").toLowerCase();
         if (segProgram === target) {
-            if (rule.argsPrefix) {
-                const argsStr = (segment.args || []).join(" ");
-                if (!argsStr.startsWith(rule.argsPrefix)) return false;
-            }
-            return true;
+            return programCoversSegment(segment, rule, target);
         }
         // Also match programs nested inside command substitutions, so that a
         // variable-assignment segment like `total=$(cat go.mod | wc -l)` is
         // covered by an allow rule for `cat`/`wc`. Nested programs match by
-        // name only (argsPrefix constrains the top-level program).
-        if (!rule.argsPrefix && segmentPrograms(segment).includes(target)) {
+        // name only — a rule with `argsPrefix` or `subs` constrains the
+        // top-level program's args, so it does NOT cover nested programs.
+        if (!rule.argsPrefix && !(Array.isArray(rule.subs) && rule.subs.length > 0) &&
+            segmentPrograms(segment).includes(target)) {
             return true;
         }
         return false;
@@ -224,16 +318,10 @@ export function isApproved(command, allowRules) {
         // EVERY program in the segment (top-level and nested in substitutions)
         // must be covered by a program allow rule. This prevents a top-level
         // allow (e.g. `echo`) from masking an unapproved nested program
-        // (e.g. `echo $(rm -rf /)`).
+        // (e.g. `echo $(rm -rf /)`). A rule with `argsPrefix`/`subs` only
+        // covers the top-level program; nested programs match by name only.
         for (const prog of progs) {
-            const covered = programRules.some(rule => {
-                if (rule.program.toLowerCase() !== prog) return false;
-                // argsPrefix constrains only the top-level program.
-                if (rule.argsPrefix && prog === (seg.program || "").toLowerCase()) {
-                    return (seg.args || []).join(" ").startsWith(rule.argsPrefix);
-                }
-                return true;
-            });
+            const covered = programRules.some(rule => programCoversSegment(seg, rule, prog));
             if (!covered) return false;
         }
     }
@@ -292,7 +380,9 @@ export default {
     mergePolicies,
     programRuleForCommand,
     segmentPrograms,
+    subChipsFor,
     segmentMatchesRule,
+    programCoversSegment,
     isBlocked,
     isApproved,
     evaluateCommand,

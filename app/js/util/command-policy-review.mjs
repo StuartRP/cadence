@@ -30,7 +30,7 @@
 import { Block, Inline } from "../elements/element.mjs";
 import { Button } from "../elements/button.mjs";
 import { classifyProgram } from "./command-parser.mjs";
-import { normalizePolicy } from "./command-rules.mjs";
+import { normalizePolicy, programCoversSegment, subChipsFor } from "./command-rules.mjs";
 
 // Selector options per scope. Each entry: [value, label, target, status] where
 // target is "session" or "global" and status is "allow" or "block".
@@ -89,18 +89,56 @@ export function statusFor(program, policy) {
 
 /**
  * Sets a program's status within a policy object, mutating it in place.
+ *
+ * Subcommand (subs) handling: when `subs` is `undefined`, the program's
+ * existing subs (if any) are carried over so switching a rule's status does
+ * not silently broaden it (e.g. allow `git status` -> block `git status`
+ * keeps the `status` filter). Pass `subs: null` to clear the filter (broad
+ * program rule), or `subs: [...]` to set it explicitly.
  * @param {object} policy canonical or legacy policy (mutated)
  * @param {string} program
  * @param {string} status "allow" | "block" | "none"
+ * @param {string[]|null|undefined} [subs] subcommand filter
  */
-export function setProgramStatus(policy, program, status) {
+export function setProgramStatus(policy, program, status, subs) {
     const norm = normalizePolicy(policy);
     const p = String(program).trim().toLowerCase();
+    // Preserve the program's existing subs when the caller didn't specify.
+    let existingSubs = null;
+    for (const r of [...norm.allow, ...norm.block]) {
+        if (r.program === p && Array.isArray(r.subs) && r.subs.length) { existingSubs = r.subs; break; }
+    }
+    const subsArr = subs === undefined ? existingSubs : (Array.isArray(subs) ? subs : null);
     norm.allow = norm.allow.filter(r => !(r.program && r.program === p));
     norm.block = norm.block.filter(r => !(r.program && r.program === p));
-    if (status === "allow") norm.allow.push({ program: p });
-    else if (status === "block") norm.block.push({ program: p });
+    if (status === "allow") norm.allow.push(subsArr ? { program: p, subs: subsArr } : { program: p });
+    else if (status === "block") norm.block.push(subsArr ? { program: p, subs: subsArr } : { program: p });
     // "none" -> removed from both (no rule).
+    policy.allow = norm.allow;
+    policy.block = norm.block;
+    return policy;
+}
+
+/**
+ * Edits the subcommand (subs) filter on a program's rule within a policy.
+ * Targets the rule matching `status` ("allow"/"block"); if that rule has no
+ * subs yet, they are added. An empty `subs` list clears the filter (broad
+ * program rule).
+ * @param {object} policy canonical or legacy policy (mutated)
+ * @param {string} program
+ * @param {string} status "allow" | "block"
+ * @param {string[]} subs new subcommand list (empty = clear)
+ */
+export function editSubs(policy, program, status, subs) {
+    const norm = normalizePolicy(policy);
+    const p = String(program).trim().toLowerCase();
+    const list = status === "block" ? norm.block : norm.allow;
+    const rule = list.find(r => r.program === p);
+    if (!rule) return;
+    const cleaned = (Array.isArray(subs) ? subs : [])
+        .map(s => String(s).trim().toLowerCase()).filter(Boolean);
+    if (cleaned.length) rule.subs = cleaned;
+    else delete rule.subs;
     policy.allow = norm.allow;
     policy.block = norm.block;
     return policy;
@@ -122,7 +160,7 @@ function defaultSelectorValue(status, scope) {
     return "allow_session";
 }
 
-function buildRow(program, status, scope, onRemove) {
+function buildRow(program, status, scope, policy, onRemove, onEditSubs) {
     const row = new Block();
     row.className = "agent-cmd-program-row cmd-policy-review-row";
 
@@ -135,6 +173,30 @@ function buildRow(program, status, scope, onRemove) {
     const name = new Inline();
     name.className = "agent-cmd-program-name";
     name.textContent = program;
+
+    // Auditability: show the subcommand (first-arg) filters carried by the
+    // allow and block rules for this program, e.g. allow `git status` and
+    // block `git reset`. A program with no subs renders an empty cell so the
+    // columns stay aligned.
+    const subsCell = new Inline();
+    subsCell.className = "agent-cmd-subs-cell";
+    const { allowSubs, blockSubs } = subChipsFor(program, policy);
+    const addSubChip = (label, subs, kind) => {
+        const c = new Inline();
+        c.className = `agent-cmd-subs-chip subs-${kind}`;
+        c.textContent = `${label}(${subs.join(", ")})`;
+        c.title = `Only the subcommands [${subs.join(", ")}] are ${kind === "allow" ? "allowed" : "blocked"}; other invocations of ${program} ${kind === "allow" ? "require approval" : "are not blocked"}.`;
+        subsCell.append(c);
+    };
+    if (allowSubs) addSubChip("allow", allowSubs, "allow");
+    if (blockSubs) addSubChip("block", blockSubs, "block");
+
+    // Click the subs cell to edit the subcommand filter (adds one when empty).
+    if (typeof onEditSubs === "function") {
+        subsCell.classList.add("agent-cmd-subs-editable");
+        subsCell.title = "Click to edit the subcommand filter (comma separated)";
+        subsCell.addEventListener("click", () => onEditSubs(program, policy));
+    }
 
     const sel = document.createElement("select");
     sel.className = "agent-cmd-policy-select";
@@ -153,7 +215,7 @@ function buildRow(program, status, scope, onRemove) {
     bin.title = `Remove policy for ${program}`;
     bin.onclick = () => onRemove(program);
 
-    row.append(chip, name, sel, bin);
+    row.append(chip, name, subsCell, sel, bin);
     return { row, sel };
 }
 
@@ -177,6 +239,15 @@ function buildAddForm(scope, getPolicy, onPersist, getGlobalRef, globalPersistRe
     input.placeholder = "program (e.g. rm, git, curl)";
     input.spellcheck = false;
 
+    // Optional subcommand (first-arg) filter. Comma/space separated, e.g.
+    // "status, log" -> only `git status` / `git log` are matched. Empty = the
+    // whole program.
+    const subsInput = document.createElement("input");
+    subsInput.type = "text";
+    subsInput.className = "cmd-policy-review-add-input cmd-policy-review-add-subs";
+    subsInput.placeholder = "subcommands (optional, e.g. status, log)";
+    subsInput.spellcheck = false;
+
     const sel = document.createElement("select");
     sel.className = "agent-cmd-policy-select cmd-policy-review-add-sel";
     const options = scope === "session" ? SESSION_OPTIONS : GLOBAL_OPTIONS;
@@ -192,26 +263,36 @@ function buildAddForm(scope, getPolicy, onPersist, getGlobalRef, globalPersistRe
     add.className = "cmd-policy-review-add-btn";
     add.classList.add("themed");
 
+    const parseSubs = (text) =>
+        text.split(/[,\s]+/).map(s => s.trim().toLowerCase()).filter(Boolean);
+
     const doAdd = () => {
         const prog = input.value.trim().toLowerCase();
         if (!prog) return;
+        const subs = parseSubs(subsInput.value);
         const opt = options.find(o => o[0] === sel.value) || options[0];
         const [, , target, status] = opt;
+        // Pass subs explicitly (null when empty) so a fresh program gets a
+        // broad rule, not a carried-over one.
+        const subsArg = subs.length ? subs : null;
         if (target === "global") {
-            setProgramStatus(getGlobalRef(), prog, status);
+            setProgramStatus(getGlobalRef(), prog, status, subsArg);
             if (globalPersistRef) globalPersistRef();
         } else {
-            setProgramStatus(getPolicy(), prog, status);
+            setProgramStatus(getPolicy(), prog, status, subsArg);
             if (onPersist) onPersist();
         }
         input.value = "";
+        subsInput.value = "";
         onAdded();
     };
 
     add.on("click", doAdd);
-    input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); doAdd(); } });
+    const onEnter = (e) => { if (e.key === "Enter") { e.preventDefault(); doAdd(); } };
+    input.addEventListener("keydown", onEnter);
+    subsInput.addEventListener("keydown", onEnter);
 
-    form.append(input, sel, add);
+    form.append(input, subsInput, sel, add);
     return form;
 }
 
@@ -266,18 +347,38 @@ export async function openCommandPolicyReviewModal({ title, scope, getPolicy, on
         header.className = "agent-cmd-program-row cmd-policy-review-header";
         const hRisk = new Inline(); hRisk.className = "agent-cmd-risk-chip cmd-policy-review-col-risk"; hRisk.textContent = "RISK";
         const hName = new Inline(); hName.className = "agent-cmd-program-name cmd-policy-review-col-name"; hName.textContent = "PROGRAM";
+        const hSubs = new Inline(); hSubs.className = "cmd-policy-review-col-subs"; hSubs.textContent = "SUBCOMMANDS";
         const hSel = new Inline(); hSel.className = "cmd-policy-review-col-sel"; hSel.textContent = "STATUS";
         const hBin = new Inline(); hBin.className = "cmd-policy-review-col-bin"; hBin.textContent = "";
-        header.append(hRisk, hName, hSel, hBin);
+        header.append(hRisk, hName, hSubs, hSel, hBin);
         table.append(header);
 
+        // Click a row's subs cell to edit its subcommand filter. Targets the
+        // rule matching the program's effective status in the displayed scope.
+        const editSubsFor = async (prog, pol) => {
+            const st = statusFor(prog, pol);
+            if (st === "none") return; // no rule in this scope to edit
+            const cur = subChipsFor(prog, pol);
+            const curSubs = st === "block" ? (cur.blockSubs || []) : (cur.allowSubs || []);
+            const val = await window.modal.prompt(
+                `Subcommands for ${prog} (${st}) — comma separated. Leave empty to allow/block the whole program.`,
+                "Edit subcommands",
+                curSubs.join(", ")
+            );
+            if (val === null) return; // cancelled
+            const subs = val.split(/[,\s]+/).map(s => s.trim().toLowerCase()).filter(Boolean);
+            editSubs(getPolicy(), prog, st, subs);
+            if (onPersist) onPersist();
+            renderTable();
+        };
+
         for (const program of programs) {
-            const { row, sel } = buildRow(program, statusFor(program, policy), scope, (prog) => {
+            const { row, sel } = buildRow(program, statusFor(program, policy), scope, policy, (prog) => {
                 // Remove from the displayed scope only.
                 setProgramStatus(getPolicy(), prog, "none");
                 if (onPersist) onPersist();
                 renderTable();
-            });
+            }, (prog, pol) => editSubsFor(prog, pol));
             if (sel) {
                 sel.onchange = () => {
                     const options = scope === "session" ? SESSION_OPTIONS : GLOBAL_OPTIONS;

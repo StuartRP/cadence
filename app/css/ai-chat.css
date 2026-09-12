@@ -1320,6 +1320,11 @@
     font-size: 12px;
 }
 
+/* Plain command box hidden when the tokenized snippet replaces it */
+.agent-cmd-box.agent-cmd-box-hidden {
+    display: none;
+}
+
 /* Per-segment (program-level) approval card */
 .agent-cmd-program-list {
     margin-top: 4px;
@@ -1334,6 +1339,34 @@
     background: color-mix(in srgb, var(--text-primary) 3%, transparent);
 }
 
+/* Traffic-light risk dot (approval card rows): color signals the risk, the
+   reason is surfaced via the program name's title attribute. */
+.agent-cmd-risk-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.agent-cmd-risk-dot.risk-safe {
+    background: var(--color-success, #4caf50);
+}
+
+.agent-cmd-risk-dot.risk-moderate {
+    background: var(--color-warning-dark, #ffa000);
+}
+
+.agent-cmd-risk-dot.risk-dangerous,
+.agent-cmd-risk-dot.risk-unknown {
+    background: var(--color-error, #f44336);
+}
+
+/* Dim rows for programs that already have a policy so NEW programs stand out. */
+.agent-cmd-program-row.agent-cmd-row-dimmed {
+    opacity: 0.5;
+}
+
+/* Shared risk chip (policy review table) */
 .agent-cmd-risk-chip {
     font-size: 10px;
     font-weight: 700;
@@ -1367,6 +1400,65 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+/* Annotated command snippet: the raw command with programs/subcommands
+   highlighted so the user can see exactly what will run. */
+.agent-cmd-annotated {
+    margin-bottom: 2px;
+}
+
+.agent-cmd-annotated-code {
+    display: block;
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    line-height: 1.5;
+    padding: 6px 8px;
+    border-radius: 4px;
+    background: var(--bg-secondary, rgba(0, 0, 0, 0.04));
+    border: 1px solid var(--border-primary);
+    color: var(--text-primary);
+    white-space: pre-wrap;
+    word-break: break-all;
+    overflow-x: auto;
+}
+
+/* Highlight spans injected by _buildAnnotatedSnippet. */
+.cmd-hl {
+    font-weight: 700;
+    border-radius: 3px;
+    padding: 0 1px;
+}
+
+/* The tokenized snippet is subdued by default: colours are muted (mixed
+   toward the base text colour) and not bold, so the program rows below
+   stand out. Hovering a "only <sub>" checkbox restores the matching
+   subcommand token to full colour + bold (see the .agent-cmd-sub-hl rules
+   below). */
+.cmd-hl-program {
+    color: color-mix(in srgb, var(--color-accent, #4f8cff) 45%, var(--text-primary));
+    background: color-mix(in srgb, var(--color-accent, #4f8cff) 7%, transparent);
+}
+
+.cmd-hl-subcommand {
+    color: color-mix(in srgb, var(--color-warning, #b58900) 45%, var(--text-primary));
+    background: color-mix(in srgb, var(--color-warning, #b58900) 7%, transparent);
+}
+
+/* The snippet's tokens are not bold by default (the base .cmd-hl is bold);
+   the row list below carries the visual weight instead. */
+.agent-cmd-annotated .cmd-hl {
+    font-weight: 400;
+}
+
+/* Hover/focus binding: `_bindSubtokenHover` adds this class to the matching
+   subcommand token (span[data-subtoken]) when its "only <sub>" checkbox is
+   hovered/focused — full colour and bold — so the user sees exactly which
+   token the rule would apply to. */
+.cmd-hl-subcommand.agent-cmd-sub-hl {
+    font-weight: 700;
+    color: var(--color-warning, #b58900);
+    background: color-mix(in srgb, var(--color-warning, #b58900) 18%, transparent);
 }
 
 .agent-cmd-policy-select {
@@ -1449,6 +1541,109 @@
 
 .cmd-policy-review-col-risk {
     min-width: 74px;
+}
+
+.cmd-policy-review-col-subs {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.agent-cmd-subs-cell {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    overflow: hidden;
+}
+
+.agent-cmd-subs-cell.agent-cmd-subs-editable {
+    cursor: pointer;
+    border-radius: 4px;
+    padding: 1px 2px;
+    box-shadow: inset 0 0 0 1px transparent;
+    transition: box-shadow 0.15s ease, background 0.15s ease;
+}
+
+.agent-cmd-subs-cell.agent-cmd-subs-editable:hover {
+    box-shadow: inset 0 0 0 1px var(--border-primary);
+    background: color-mix(in srgb, var(--text-primary) 5%, transparent);
+}
+
+.agent-cmd-subs-chip {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    line-height: 1.5;
+    padding: 1px 6px;
+    border-radius: 8px;
+    white-space: nowrap;
+    cursor: help;
+    flex-shrink: 0;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.agent-cmd-subs-chip.subs-allow {
+    color: var(--color-success, #4caf50);
+    background: color-mix(in srgb, var(--color-success, #4caf50) 14%, transparent);
+    border: 1px solid color-mix(in srgb, var(--color-success, #4caf50) 35%, transparent);
+}
+
+.agent-cmd-subs-chip.subs-block {
+    color: var(--color-error, #f44336);
+    background: color-mix(in srgb, var(--color-error, #f44336) 14%, transparent);
+    border: 1px solid color-mix(in srgb, var(--color-error, #f44336) 35%, transparent);
+}
+
+/* "New program" scope flag: checkbox shown only for programs with no existing
+   rule and a first-arg, letting the user scope the rule to that subcommand. */
+.agent-cmd-limit-flag-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    user-select: none;
+    padding: 1px 6px;
+    border-radius: 8px;
+    border: 1px dashed var(--border-primary);
+    background: color-mix(in srgb, var(--text-primary) 3%, transparent);
+    white-space: nowrap;
+    max-width: 160px;
+    overflow: hidden;
+}
+
+.agent-cmd-limit-flag-label .agent-cmd-limit-flag-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.agent-cmd-limit-flag-label:hover {
+    border-color: var(--color-accent, #4f8cff);
+    color: var(--text-primary);
+}
+
+.agent-cmd-limit-flag-label:has(.agent-cmd-limit-flag:checked) {
+    border-style: solid;
+    border-color: var(--color-accent, #4f8cff);
+    background: color-mix(in srgb, var(--color-accent, #4f8cff) 12%, transparent);
+    color: var(--text-primary);
+}
+
+.agent-cmd-limit-flag {
+    margin: 0;
+    width: 12px;
+    height: 12px;
+    accent-color: var(--color-accent, #4f8cff);
+    cursor: pointer;
 }
 
 .cmd-policy-review-col-sel {
