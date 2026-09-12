@@ -574,6 +574,7 @@ class AIManager {
 		this.fileBar.classList.add('ai-file-context-bar');
 		this.fileBar.addRootsButton(async () => {
 			const picker = new RootPicker(this);
+			window.modal.snapshot(); // capture any modal below before replacing content
 			window.modal.inner.innerHTML = '';
 			window.modal.inner.append(picker);
 			window.modal.actionBar.empty();
@@ -587,6 +588,7 @@ class AIManager {
 		});
 		this.fileBar.addLibraryButton(async () => {
 			const picker = new SkillPicker(this);
+			window.modal.snapshot(); // capture any modal below before replacing content
 			window.modal.inner.innerHTML = '';
 			window.modal.inner.append(picker);
 			window.modal.actionBar.empty();

@@ -409,6 +409,7 @@ export async function openCommandPolicyReviewModal({ title, scope, getPolicy, on
     okButton.classList.add("themed");
     okButton.on("click", () => window.modal.hide(true));
 
+    window.modal.snapshot(); // capture any modal below before replacing content
     window.modal.inner.empty();
     window.modal.inner.append(inner);
     window.modal.actionBar.empty();

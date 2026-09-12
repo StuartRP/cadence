@@ -692,6 +692,7 @@ export class AgentConfigPanel extends Block {
 		const isEdit = !!conn;
 		const modalObj = window.modal;
 
+		modalObj.snapshot(); // capture any modal below before replacing content
 		modalObj.inner.innerHTML = "";
 		modalObj.actionBar.innerHTML = "";
 

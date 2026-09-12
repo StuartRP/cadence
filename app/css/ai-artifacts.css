@@ -1529,6 +1529,12 @@ ui-editor-holder .artifacts-accordion-container .ace_editor,
     justify-content: space-between;
 }
 
+/* Keep the label/description left-aligned; the cog button is pushed to the end */
+.artifacts-accordion-container .toggle-row.has-cog .setting-meta {
+    flex: 1;
+    min-width: 0;
+}
+
 .artifacts-accordion-container .setting-cog-btn {
     flex-shrink: 0;
     margin-top: 2px;

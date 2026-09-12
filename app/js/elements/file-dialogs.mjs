@@ -100,6 +100,7 @@ export const promptAddFolder = async () => {
         });
 
         const showFolderModal = () => {
+            modal.snapshot(); // capture any modal below before replacing content
             modal.inner.innerHTML = '';
             modal.inner.append(contentContainer);
             modal.actionBar.innerHTML = '';
@@ -350,6 +351,7 @@ export const promptSaveFile = async (suggestedName = "Untitled", suggestedFolder
         contentContainer.innerHTML = '<h1>Save File As</h1><p>Choose a location and enter a file name.</p>';
         contentContainer.append(folderSelectorContainer, pickerList, inputContainer);
 
+        modal.snapshot(); // capture any modal below before replacing content
         modal.inner.innerHTML = '';
         modal.inner.append(contentContainer);
 

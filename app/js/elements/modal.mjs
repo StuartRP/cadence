@@ -8,6 +8,10 @@ class Modal {
     #promiseResolve = null;
     #promiseReject = null;
     #panel = null;
+    #keyListenerOn = false;
+    #snapshotTaken = false; // set by snapshot() so show() skips its auto-snapshot
+    #stack = []; // snapshots of previous modal content (inner + actionBar) so a
+                  // nested modal (prompt/confirm) restores the one below it
 
     constructor() {
         this.#panel = new Panel();
@@ -37,11 +41,53 @@ class Modal {
         };
     }
 
+    // Capture the currently displayed content (and the promise it belongs to)
+    // so it can be restored when a nested modal closes. Call this BEFORE
+    // replacing inner/actionBar content to nest a modal — the auto-snapshot
+    // in show() only fires if content is still intact, so snapshotting after
+    // replacement would save the new content and "restoring" it would be a
+    // no-op that looks like a re-render.
+    snapshot() {
+        if (this.#panel.hasAttribute('active')) {
+            // Only capture the bar's real buttons — not its internal
+            // btnOverflow/pnlOverflow children. ActionBar.append() rejects
+            // non-Button children (pnlOverflow is a Panel) and would bail
+            // out without restoring anything.
+            this.#stack.push({
+                inner: [...this.inner.children],
+                actionBar: [...this.actionBar.children].filter(
+                    el => el instanceof Button && el !== this.actionBar.btnOverflow
+                ),
+                resolve: this.#promiseResolve
+            });
+            this.#snapshotTaken = true;
+        }
+    }
+
     show() {
+        // If a modal is already active and no explicit snapshot() was taken
+        // for this level, capture its content (and the promise it is
+        // awaiting) so it can be restored when this nested modal closes —
+        // e.g. a prompt opened from inside another modal returns to it
+        // instead of destroying it. Each nested level gets its own snapshot;
+        // levels restore in reverse order as they close.
+        if (this.#panel.hasAttribute('active') && !this.#snapshotTaken) {
+            this.snapshot();
+        }
+        this.#snapshotTaken = false;
+        // Always append the panel (no-op if already in the DOM) and re-activate
+        // it so a re-shown modal replays its transition.
         document.body.append(this.#panel);
         // A teeny delay to allow the element to be in the DOM for the CSS transition
         setTimeout(() => this.#panel.setAttribute('active', ''), 10);
-        document.addEventListener('keydown', this.keyListener);
+        if (!this.#keyListenerOn) {
+            document.addEventListener('keydown', this.keyListener);
+            this.#keyListenerOn = true;
+        }
+        // Each show() returns its own promise. The previous (outer) promise's
+        // resolver was saved in the snapshot above and is restored by hide()
+        // when this level closes, so the outer `await show()` still settles
+        // when the outer modal itself is closed.
         return new Promise((resolve, reject) => {
             this.#promiseResolve = resolve;
             this.#promiseReject = reject;
@@ -49,17 +95,41 @@ class Modal {
     }
 
     hide(resolutionValue) {
+        // A nested modal is closing: restore the content of the modal below
+        // it and keep the panel open instead of removing it. The outer
+        // modal's pending promise (from its own show() call) is restored
+        // alongside the content, so its `await show()` still settles when
+        // the outer modal itself is closed.
+        if (this.#stack.length > 0) {
+            const snapshot = this.#stack.pop();
+            // Settle the nested modal's own promise (its awaiter gets the
+            // value / null / false), then hand the slot back to the modal
+            // below so its `await show()` still settles when it closes.
+            if (this.#promiseResolve) {
+                this.#promiseResolve(resolutionValue);
+            }
+            this.#promiseResolve = snapshot.resolve ?? null;
+            this.inner.empty();
+            this.actionBar.empty();
+            this.inner.append(...snapshot.inner);
+            this.actionBar.append(...snapshot.actionBar);
+            return;
+        }
+        // Outermost modal closing: settle its promise and tear the panel down.
+        if (this.#promiseResolve) {
+            this.#promiseResolve(resolutionValue);
+            this.#promiseResolve = null;
+        }
         this.#panel.removeAttribute('active');
         document.removeEventListener('keydown', this.keyListener);
+        this.#keyListenerOn = false;
         this.#panel.blanker.remove();
         // Let CSS animation finish before removing from DOM
         setTimeout(() => this.#panel.remove(), 300);
-        if (this.#promiseResolve) {
-            this.#promiseResolve(resolutionValue);
-        }
     }
 
     notice(content, title = 'Notice') {
+        this.snapshot(); // capture any active modal below before replacing content
         this.inner.innerHTML = `<h1>${title}</h1>${content}`;
         this.actionBar.empty(); // Clear previous buttons
 
@@ -72,6 +142,7 @@ class Modal {
     }
 
     confirm(content, title = 'Confirm', buttons = ['Ok', 'Cancel']) {
+        this.snapshot(); // capture any active modal below before replacing content
         this.inner.innerHTML = `<h1>${title}</h1>${content}`;
         this.actionBar.empty();
 
@@ -89,6 +160,7 @@ class Modal {
     }
 
     prompt(content, title = 'Prompt', defaultValue = '') {
+        this.snapshot(); // capture any active modal below before replacing content
         // Clear previous content
         this.inner.innerHTML = '';
         this.actionBar.empty();

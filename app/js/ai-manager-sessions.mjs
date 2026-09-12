@@ -840,6 +840,7 @@ class AIManagerSessions {
 		
 		contentContainer.append(listContainer);
 
+		window.modal.snapshot(); // capture any modal below before replacing content
 		window.modal.inner.innerHTML = '';
 		window.modal.inner.append(contentContainer);
 

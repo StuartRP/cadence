@@ -1,4 +1,4 @@
-ui-session-artifacts-panel ui-button {
+ui-session-artifacts-panel ui-button:not(.setting-cog-btn) {
     background: var(--theme-dark, rgba(0, 0, 0, 0.33));
     color: #ffffff;
     border: none;
@@ -13,7 +13,7 @@ ui-session-artifacts-panel ui-button {
     font-weight: 600;
 }
 
-ui-session-artifacts-panel ui-button[active] {
+ui-session-artifacts-panel ui-button[active]:not(.setting-cog-btn) {
     background: var(--bg-tertiary, rgba(0, 0, 0, 0.66));
 }
 
