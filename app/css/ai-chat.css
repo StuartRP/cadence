@@ -1451,6 +1451,62 @@
     min-width: 74px;
 }
 
+.cmd-policy-review-col-subs {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.agent-cmd-subs-cell {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    overflow: hidden;
+}
+
+.agent-cmd-subs-cell.agent-cmd-subs-editable {
+    cursor: pointer;
+    border-radius: 4px;
+    padding: 1px 2px;
+    box-shadow: inset 0 0 0 1px transparent;
+    transition: box-shadow 0.15s ease, background 0.15s ease;
+}
+
+.agent-cmd-subs-cell.agent-cmd-subs-editable:hover {
+    box-shadow: inset 0 0 0 1px var(--border-primary);
+    background: color-mix(in srgb, var(--text-primary) 5%, transparent);
+}
+
+.agent-cmd-subs-chip {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    line-height: 1.5;
+    padding: 1px 6px;
+    border-radius: 8px;
+    white-space: nowrap;
+    cursor: help;
+    flex-shrink: 0;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.agent-cmd-subs-chip.subs-allow {
+    color: var(--color-success, #4caf50);
+    background: color-mix(in srgb, var(--color-success, #4caf50) 14%, transparent);
+    border: 1px solid color-mix(in srgb, var(--color-success, #4caf50) 35%, transparent);
+}
+
+.agent-cmd-subs-chip.subs-block {
+    color: var(--color-error, #f44336);
+    background: color-mix(in srgb, var(--color-error, #f44336) 14%, transparent);
+    border: 1px solid color-mix(in srgb, var(--color-error, #f44336) 35%, transparent);
+}
+
 .cmd-policy-review-col-sel {
     flex-shrink: 0;
     max-width: 170px;

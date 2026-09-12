@@ -6,7 +6,7 @@ import workspaceClient from "./workspace-client.mjs"
 import { getAgentDirectives } from "./ai-manager-agent-prompt.mjs"
 import agentTools from "./agent/agent-tools.mjs"
 import { Agent } from "./agent/agent.mjs"
-	import { normalizePolicy, mergePolicies, evaluateCommand, segmentMatchesRule, segmentPrograms } from "./util/command-rules.mjs"
+	import { normalizePolicy, mergePolicies, evaluateCommand, segmentMatchesRule, segmentPrograms, subChipsFor } from "./util/command-rules.mjs"
 import { parseCommandLine, classifyProgram } from "./util/command-parser.mjs"
 export const MAX_RECENT_MESSAGES_TO_PRESERVE = 5
 export const MAX_DIRECT_CYCLE_SUMMARIES = 3
@@ -1817,12 +1817,25 @@ class AIManagerHistory {
 		return session.commandPolicy;
 	}
 
-	/**
-	 * Adds a program-level rule to a policy list, deduping by program name.
-	 */
-	_pushProgramRule(list, program) {
-		const exists = list.some(r => (r && typeof r === "object" && r.program ? r.program === program : r === program));
-		if (!exists) list.push({ program });
+		/**
+		 * Adds a program-level rule to a policy list, deduping by program name.
+		 * If `subs` (a first-arg string) is provided, the rule carries a subs
+		 * filter so only that subcommand is matched (e.g. allow `git status`).
+		 * An existing rule for the program is upgraded to carry subs if it had
+		 * none.
+		 */
+		_pushProgramRule(list, program, subs) {
+			const subsArr = (subs && typeof subs === "string" && subs.trim()) ? [subs.trim().toLowerCase()] : null;
+			const existing = list.find(r => (r && typeof r === "object" && r.program ? r.program === program : r === program));
+			if (existing && typeof existing === "object" && existing.program) {
+				// Upgrade an existing broad rule to a subs rule if we now have
+				// a first-arg context and the rule had no subs yet.
+				if (subsArr && !existing.subs) existing.subs = subsArr;
+				return;
+			}
+			const rule = { program };
+			if (subsArr) rule.subs = subsArr;
+			list.push(rule);
 	}
 
 	/**
@@ -1949,6 +1962,7 @@ class AIManagerHistory {
 			(this.manager.activeSessionId === targetSessionId ? this.manager.activeSession : null);
 		const sessionPolicy = session ? this._normalizeSessionPolicy(session) : { allow: [], block: [] };
 		const masterPolicy = this.manager.config?.commandPolicy || { allow: [], block: [] };
+		const mergedPolicy = mergePolicies(masterPolicy, sessionPolicy);
 
 		const card = new Block();
 		card.className = "agent-cmd-program-list";
@@ -1984,6 +1998,22 @@ class AIManagerHistory {
 			name.className = "agent-cmd-program-name";
 			name.textContent = program;
 
+			// Auditability: surface the subcommand (first-arg) filters already
+			// configured for this program across the merged policy, e.g. allow
+			// `git status` / block `git reset`. Empty cell when none configured.
+			const subsCell = new Inline();
+			subsCell.className = "agent-cmd-subs-cell";
+			const { allowSubs, blockSubs } = subChipsFor(program, mergedPolicy);
+			const addSubChip = (label, subs, kind) => {
+				const c = new Inline();
+				c.className = `agent-cmd-subs-chip subs-${kind}`;
+				c.textContent = `${label}(${subs.join(", ")})`;
+				c.title = `Only the subcommands [${subs.join(", ")}] are ${kind === "allow" ? "allowed" : "blocked"}; other invocations of ${program} ${kind === "allow" ? "require approval" : "are not blocked"}.`;
+				subsCell.append(c);
+			};
+			if (allowSubs) addSubChip("allow", allowSubs, "allow");
+			if (blockSubs) addSubChip("block", blockSubs, "block");
+
 			const sel = document.createElement("select");
 			sel.className = "agent-cmd-policy-select";
 			for (const [value, label] of selectOptions) {
@@ -1995,7 +2025,7 @@ class AIManagerHistory {
 			sel.value = this._initialPolicyValue(program, masterPolicy, sessionPolicy);
 			selectorRefs.set(program, sel);
 
-			row.append(chip, name, sel);
+			row.append(chip, name, subsCell, sel);
 			card.append(row);
 		}
 
@@ -2027,14 +2057,28 @@ class AIManagerHistory {
 			const master = this.manager.config?.commandPolicy || { allow: [], block: [] };
 			const sp = activeSession ? this._normalizeSessionPolicy(activeSession) : { allow: [], block: [] };
 
+			// Subcommand (first-arg) context for each program, so "always
+			// allow/block" can write a precise subs rule (e.g. allow `git
+			// status`) rather than a broad program rule. Programs extracted
+			// from nested substitutions have no segment/args context -> null.
+			const subsContext = new Map();
+			for (const program of parsed.programs) {
+				const seg = parsed.segments.find(s => s.program === program);
+				const first = seg && seg.args && seg.args.length > 0 ? seg.args[0] : null;
+				subsContext.set(program, first);
+			}
+
 			const blockedPrograms = [];
 			for (const [program, choice] of decisions) {
 				// Persistence: only session/always choices write a rule.
 				// *_once choices are instance-only (no rule written).
-				if (choice === "allow_session") this._pushProgramRule(sp.allow, program);
-				else if (choice === "allow_always") this._pushProgramRule(master.allow, program);
-				else if (choice === "block_session") this._pushProgramRule(sp.block, program);
-				else if (choice === "block_always") this._pushProgramRule(master.block, program);
+				// When the program has a first-arg context, the rule carries a
+				// subs filter so only that subcommand is allowed/blocked.
+				const subs = subsContext.get(program);
+				if (choice === "allow_session") this._pushProgramRule(sp.allow, program, subs);
+				else if (choice === "allow_always") this._pushProgramRule(master.allow, program, subs);
+				else if (choice === "block_session") this._pushProgramRule(sp.block, program, subs);
+				else if (choice === "block_always") this._pushProgramRule(master.block, program, subs);
 				// This-instance decision: ANY block choice (incl. block_once)
 				// rejects the command for this run.
 				if (choice.startsWith("block")) blockedPrograms.push(program);
