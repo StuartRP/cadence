@@ -127,8 +127,9 @@ export class FileList extends ContentFill {
 		}
 	}
 	byTitle(title) {
-		const file = this.querySelector(`ui-file-item[title="${title}"`)
-		if (!file) console.warn("No match found for", title)
+		const find = title.startsWith("/")?title.substring(1):title
+		const file = this.querySelector(`ui-file-item[title="${find}"`)
+		if (!file) console.warn("No match found for", find)
 		return file
 	}
 
