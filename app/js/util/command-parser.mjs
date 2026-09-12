@@ -382,14 +382,22 @@ function scanTopLevel(cmd) {
     let i = 0;
     let word = "";
     let wordHasQuote = false;
+    let wordStart = -1; // index of the first char of the current word
     let subStack = []; // stack of { type: "dollar"|"backtick", depth }
 
     const flushWord = () => {
         if (word.length > 0) {
-            events.push({ kind: "word", text: word, quoted: wordHasQuote });
+            // `end` is the index just past the last word char (exclusive).
+            events.push({ kind: "word", text: word, quoted: wordHasQuote, start: wordStart, end: i });
             word = "";
             wordHasQuote = false;
+            wordStart = -1;
         }
+    };
+
+    // Record the start of a word on the first character added.
+    const ensureWordStart = () => {
+        if (wordStart === -1) wordStart = i;
     };
 
     while (i < n) {
@@ -428,12 +436,14 @@ function scanTopLevel(cmd) {
         // --- top-level state --------------------------------------------
         if (c === "\\") {
             // escape: next char is literal
+            ensureWordStart();
             word += (i + 1 < n ? cmd[i + 1] : "");
             i += 2;
             continue;
         }
         if (c === "'") {
             // single quote: literal until next '
+            ensureWordStart();
             wordHasQuote = true;
             i++;
             while (i < n && cmd[i] !== "'") { word += cmd[i]; i++; }
@@ -445,11 +455,12 @@ function scanTopLevel(cmd) {
             // Inside double quotes, $(...) and backticks ARE expanded (unlike
             // single quotes), so scan for them and emit substitution events.
             // Plain variable expansion ($var / ${var}) is NOT a substitution.
+            ensureWordStart();
             wordHasQuote = true;
             i++;
             while (i < n && cmd[i] !== '"') {
                 const ch = cmd[i];
-                if (ch === "\\" && i + 1 < n) { word += cmd[i] + cmd[i + 1]; i += 2; continue; }
+                if (ch === "\\" && i + 1 < n) { ensureWordStart(); word += cmd[i] + cmd[i + 1]; i += 2; continue; }
                 if (ch === "$" && cmd[i + 1] === "(") {
                     // $( ... ) substitution inside double quotes
                     const start = i + 2;
@@ -464,7 +475,8 @@ function scanTopLevel(cmd) {
                         i++;
                     }
                     const inner = cmd.slice(start, i);
-                    events.push({ kind: "substitution", type: "dollar", text: inner });
+                    // Span covers the full `$( ... )` (from `$` to just past `)`).
+                    events.push({ kind: "substitution", type: "dollar", text: inner, start: start - 2, end: i + 1 });
                     i++; // skip closing )
                     continue;
                 }
@@ -477,10 +489,12 @@ function scanTopLevel(cmd) {
                         i++;
                     }
                     const inner = cmd.slice(start, i);
-                    events.push({ kind: "substitution", type: "backtick", text: inner });
+                    // Span covers the full `...` (from opening backtick to just past closing).
+                    events.push({ kind: "substitution", type: "backtick", text: inner, start: start - 1, end: i + 1 });
                     i++; // skip closing `
                     continue;
                 }
+                ensureWordStart();
                 word += ch; i++;
             }
             i++; // skip closing "
@@ -488,6 +502,7 @@ function scanTopLevel(cmd) {
         }
         if (c === "`") {
             // backtick substitution: capture the inner command as a sub-event
+            ensureWordStart();
             wordHasQuote = true;
             const start = i + 1;
             i++;
@@ -496,12 +511,14 @@ function scanTopLevel(cmd) {
                 i++;
             }
             const inner = cmd.slice(start, i);
-            events.push({ kind: "substitution", type: "backtick", text: inner });
+            // Span covers the full `...` (from opening backtick to just past closing).
+            events.push({ kind: "substitution", type: "backtick", text: inner, start: start - 1, end: i + 1 });
             i++; // skip closing `
             continue;
         }
         if (c === "$" && next === "(") {
             // `$( ... )` substitution
+            ensureWordStart();
             wordHasQuote = true;
             const start = i + 2;
             let depth = 0;
@@ -515,12 +532,14 @@ function scanTopLevel(cmd) {
                 i++;
             }
             const inner = cmd.slice(start, i);
-            events.push({ kind: "substitution", type: "dollar", text: inner });
+            // Span covers the full `$( ... )` (from `$` to just past `)`).
+            events.push({ kind: "substitution", type: "dollar", text: inner, start: start - 2, end: i + 1 });
             i++; // skip closing )
             continue;
         }
         if (c === "$" && next === "{") {
             // `${ ... }` — treat as a word fragment (variable expansion)
+            ensureWordStart();
             word += "$";
             i++;
             continue;
@@ -598,6 +617,7 @@ function scanTopLevel(cmd) {
             continue;
         }
         // ordinary word character
+        ensureWordStart();
         word += c;
         i++;
     }
@@ -618,6 +638,7 @@ function buildSegments(events) {
     const segments = [];
     let current = {
         words: [],
+        wordSpans: [],
         redirects: [],
         comments: [],
         substitutions: [],
@@ -642,7 +663,7 @@ function buildSegments(events) {
             precedingSep: pendingSep
         });
         current = {
-            words: [], redirects: [], comments: [], substitutions: [],
+            words: [], wordSpans: [], redirects: [], comments: [], substitutions: [],
             background: false, pipedToShell: false, heredoc: false, comment: false, text: ""
         };
     };
@@ -651,6 +672,7 @@ function buildSegments(events) {
     for (const ev of events) {
         if (ev.kind === "word") {
             current.words.push(ev.text);
+            current.wordSpans.push({ start: ev.start, end: ev.end });
             if (ev.quoted) current.hasQuotes = true;
         } else if (ev.kind === "substitution") {
             current.substitutions.push(ev);
@@ -722,7 +744,7 @@ function extractProgramFromWords(words) {
     if (i >= words.length) return null;
     const program = words[i];
     const args = words.slice(i + 1);
-    return { program, args };
+    return { program, args, programIndex: i };
 }
 
 /**
@@ -845,6 +867,8 @@ export function parseCommandLine(cmd) {
         const extracted = extractProgramFromWords(seg.words);
         let program = extracted ? extracted.program : null;
         let args = extracted ? extracted.args : [];
+        // Index of the program word within seg.words (used for highlighting).
+        let programWordIndex = extracted ? extracted.programIndex : -1;
 
         // Skip wrappers (and their env-assignment / duration args)
         while (program && WRAPPER_PROGRAMS.has(program.toLowerCase())) {
@@ -857,6 +881,7 @@ export function parseCommandLine(cmd) {
             if (!next) break;
             program = next;
             args = args.slice(k + 1);
+            programWordIndex = programWordIndex + 1 + k;
         }
 
         // Normalize the program name; drop it if it is not a plausible
@@ -872,7 +897,9 @@ export function parseCommandLine(cmd) {
         const segment = {
             text: seg.text,
             words: seg.words,
+            wordSpans: seg.wordSpans,
             program,
+            programWordIndex,
             args,
             background: seg.background,
             pipedToShell,
@@ -952,4 +979,75 @@ export function parseCommandLine(cmd) {
     };
 }
 
-export default { parseCommandLine, extractPrograms, classifyProgram };
+// ---------------------------------------------------------------------------
+// Annotation (highlight spans for UI)
+// ---------------------------------------------------------------------------
+
+/**
+ * Annotates a command line for display: returns the original string plus a
+ * list of character-offset spans marking programs and their subcommands
+ * (first arg).
+ *
+ * Top-level programs are located via segment `wordSpans`. Nested programs
+ * (inside `$( )`, backticks, `sh -c`, `find -exec`, `xargs`) are located by
+ * recursively parsing each substitution body and offsetting its spans into
+ * the original command.
+ *
+ * @param {string} cmd
+ * @returns {{ command: string, spans: Array<{start: number, end: number, kind: "program"|"subcommand", name: string}> }}
+ *   Spans are sorted by `start` and non-overlapping.
+ */
+export function annotateCommand(cmd) {
+    const command = String(cmd || "");
+    const spans = [];
+
+    const addSpan = (start, end, kind, name) => {
+        if (start == null || end == null || end <= start || start < 0 || end > command.length) return;
+        spans.push({ start, end, kind, name });
+    };
+
+    // `baseOffset` is the absolute position (in the original command) where the
+    // string that produced `segments` begins. Segment wordSpans are 0-based
+    // within that string, so absolute = baseOffset + span.
+    const processSegments = (segments, baseOffset) => {
+        for (const seg of segments) {
+            const spansArr = seg.wordSpans || [];
+            if (seg.program && seg.programWordIndex >= 0 && seg.programWordIndex < spansArr.length) {
+                const ps = spansArr[seg.programWordIndex];
+                if (ps) addSpan(baseOffset + ps.start, baseOffset + ps.end, "program", seg.program);
+                const subIdx = seg.programWordIndex + 1;
+                if (seg.args && seg.args.length > 0 && subIdx < spansArr.length) {
+                    const ss = spansArr[subIdx];
+                    if (ss) addSpan(baseOffset + ss.start, baseOffset + ss.end, "subcommand", seg.args[0]);
+                }
+            }
+            // Recurse into substitutions. `sub.start` is 0-based within the
+            // current string, so the body begins at baseOffset + sub.start +
+            // delimLen. Re-parsing the body yields 0-based spans, so pass the
+            // body's absolute start as the new baseOffset.
+            for (const sub of (seg.substitutions || [])) {
+                if (sub.start == null || sub.end == null) continue;
+                const delimLen = sub.type === "dollar" ? 2 : 1; // `$(` or backtick
+                const bodyStart = baseOffset + sub.start + delimLen;
+                processSegments(parseCommandLine(sub.text).segments, bodyStart);
+            }
+        }
+    };
+
+    processSegments(parseCommandLine(command).segments, 0);
+
+    // Sort and drop overlapping spans (keep the earliest-starting one).
+    spans.sort((a, b) => a.start - b.start || b.end - a.end);
+    const result = [];
+    let lastEnd = -1;
+    for (const s of spans) {
+        if (s.start >= lastEnd) {
+            result.push(s);
+            lastEnd = s.end;
+        }
+    }
+
+    return { command, spans: result };
+}
+
+export default { parseCommandLine, extractPrograms, classifyProgram, annotateCommand };

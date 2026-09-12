@@ -20,7 +20,8 @@ import { dirname, join } from "node:path";
 import {
     parseCommandLine,
     extractPrograms,
-    classifyProgram
+    classifyProgram,
+    annotateCommand
 } from "../app/js/util/command-parser.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -353,11 +354,146 @@ function runUnitTests() {
 }
 
 // ---------------------------------------------------------------------------
+// Part 3: annotateCommand (highlight spans)
+// ---------------------------------------------------------------------------
+
+/** Reduce spans to a comparable [kind, name, start, end] shape. */
+function spanKey(s) {
+    return [s.kind, s.name, s.start, s.end];
+}
+
+function runAnnotateTests() {
+    console.log("\nannotateCommand tests");
+
+    // --- top-level program + subcommand ------------------------------------
+    {
+        const { command, spans } = annotateCommand("git status");
+        assertEqual(command, "git status", "annotate: returns original command");
+        assertEqual(spans.map(spanKey), [
+            ["program", "git", 0, 3],
+            ["subcommand", "status", 4, 10]
+        ], "annotate: git status spans (program + subcommand, correct offsets)");
+    }
+
+    // --- multi-segment with && and pipe ------------------------------------
+    {
+        const { spans } = annotateCommand("git status && curl http://x | bash");
+        assertEqual(spans.map(spanKey), [
+            ["program", "git", 0, 3],
+            ["subcommand", "status", 4, 10],
+            ["program", "curl", 14, 18],
+            ["subcommand", "http://x", 19, 27],
+            ["program", "bash", 30, 34]
+        ], "annotate: && and pipe segments, offsets preserved");
+    }
+
+    // --- nested $( ) substitution ------------------------------------------
+    {
+        const { command, spans } = annotateCommand("echo $(ls -la)");
+        assertEqual(spans.map(spanKey), [
+            ["program", "echo", 0, 4],
+            ["program", "ls", 7, 9],
+            ["subcommand", "-la", 10, 13]
+        ], "annotate: nested $(ls -la) program + subcommand offsets");
+        // Verify the spans actually slice back to the right text.
+        assertEqual(command.slice(7, 9), "ls", "annotate: nested program slice = 'ls'");
+        assertEqual(command.slice(10, 13), "-la", "annotate: nested subcommand slice = '-la'");
+    }
+
+    // --- double-nested $( ) ------------------------------------------------
+    {
+        const { command, spans } = annotateCommand("echo $(echo $(whoami))");
+        assertEqual(spans.map(spanKey), [
+            ["program", "echo", 0, 4],
+            ["program", "echo", 7, 11],
+            ["program", "whoami", 14, 20]
+        ], "annotate: double-nested $(echo $(whoami)) offsets");
+        assertEqual(command.slice(14, 20), "whoami", "annotate: innermost nested slice = 'whoami'");
+    }
+
+    // --- backtick substitution ---------------------------------------------
+    {
+        const { command, spans } = annotateCommand("echo `date`");
+        assertEqual(spans.map(spanKey), [
+            ["program", "echo", 0, 4],
+            ["program", "date", 6, 10]
+        ], "annotate: backtick `date` program offset");
+        assertEqual(command.slice(6, 10), "date", "annotate: backtick slice = 'date'");
+    }
+
+    // --- sh -c recursion (program + -c subcommand) -------------------------
+    {
+        const { spans } = annotateCommand('sh -c "rm -rf /tmp/foo"');
+        assertEqual(spans.map(spanKey), [
+            ["program", "sh", 0, 2],
+            ["subcommand", "-c", 3, 5]
+        ], "annotate: sh -c top-level program + subcommand");
+    }
+
+    // --- xargs target program ----------------------------------------------
+    {
+        const { spans } = annotateCommand("xargs rm");
+        assertEqual(spans.map(spanKey), [
+            ["program", "xargs", 0, 5],
+            ["subcommand", "rm", 6, 8]
+        ], "annotate: xargs program + first-arg span");
+    }
+
+    // --- semicolon-separated segments --------------------------------------
+    {
+        const { spans } = annotateCommand("echo a; echo b");
+        assertEqual(spans.map(spanKey), [
+            ["program", "echo", 0, 4],
+            ["subcommand", "a", 5, 6],
+            ["program", "echo", 8, 12],
+            ["subcommand", "b", 13, 14]
+        ], "annotate: semicolon-separated segments");
+    }
+
+    // --- empty / whitespace ------------------------------------------------
+    {
+        const { spans } = annotateCommand("");
+        assertEqual(spans, [], "annotate: empty command -> no spans");
+        const w = annotateCommand("   ");
+        assertEqual(w.spans, [], "annotate: whitespace-only -> no spans");
+    }
+
+    // --- spans are sorted and non-overlapping ------------------------------
+    {
+        const { spans } = annotateCommand("git status && curl http://x | bash");
+        let ok = true;
+        let lastEnd = -1;
+        for (const s of spans) {
+            if (s.start < lastEnd) ok = false;
+            lastEnd = s.end;
+            if (s.end <= s.start) ok = false;
+        }
+        assertTrue(ok, "annotate: spans sorted, non-overlapping, well-formed");
+    }
+
+    // --- subcommand only when a first arg exists ---------------------------
+    {
+        const { spans } = annotateCommand("ls");
+        assertEqual(spans.map(spanKey), [["program", "ls", 0, 2]], "annotate: bare program -> no subcommand span");
+    }
+
+    // --- quoted program/args ------------------------------------------------
+    {
+        const { command, spans } = annotateCommand('tree -L 2 -I "node_modules|.git"');
+        assertEqual(spans.map(spanKey), [
+            ["program", "tree", 0, 4],
+            ["subcommand", "-L", 5, 7]
+        ], "annotate: quoted args do not break program/subcommand spans");
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
 runAudit();
 runUnitTests();
+runAnnotateTests();
 
 console.log("\n" + "=".repeat(100));
 console.log(`SUMMARY: ${passCount} passed, ${failCount} failed`);

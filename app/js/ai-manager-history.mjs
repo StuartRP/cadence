@@ -7,7 +7,7 @@ import { getAgentDirectives } from "./ai-manager-agent-prompt.mjs"
 import agentTools from "./agent/agent-tools.mjs"
 import { Agent } from "./agent/agent.mjs"
 	import { normalizePolicy, mergePolicies, evaluateCommand, segmentMatchesRule, segmentPrograms, subChipsFor } from "./util/command-rules.mjs"
-import { parseCommandLine, classifyProgram } from "./util/command-parser.mjs"
+import { parseCommandLine, classifyProgram, annotateCommand } from "./util/command-parser.mjs"
 export const MAX_RECENT_MESSAGES_TO_PRESERVE = 5
 export const MAX_DIRECT_CYCLE_SUMMARIES = 3
 
@@ -1622,6 +1622,9 @@ class AIManagerHistory {
 					this._buildLegacyApprovalActions(element, message, targetSessionId);
 				} else {
 					this._buildPerSegmentApprovalCard(element, message, targetSessionId, parsed);
+					// The tokenized snippet inside the approval card replaces the
+					// plain command box — hide it (kept in the DOM for a11y).
+					cmdBox.classList.add("agent-cmd-box-hidden");
 				}
 			} else {
 				const statusTag = new Block();
@@ -1819,18 +1822,32 @@ class AIManagerHistory {
 
 		/**
 		 * Adds a program-level rule to a policy list, deduping by program name.
-		 * If `subs` (a first-arg string) is provided, the rule carries a subs
-		 * filter so only that subcommand is matched (e.g. allow `git status`).
-		 * An existing rule for the program is upgraded to carry subs if it had
-		 * none.
+		 * If `subs` (a first-arg string) is provided and no rule exists yet, the
+		 * new rule carries a subs filter so only that subcommand is matched
+		 * (e.g. allow `git status`).
+		 *
+		 * Never narrows an existing rule:
+		 * - Broad (subs-less) rule already present: it already covers this
+		 *   subcommand, so the choice is a no-op. Adding a subs filter here
+		 *   would make the policy MORE restrictive (e.g. approving `git
+		 *   status` "always" when `git` is broadly allowed would stop `git
+		 *   reset` from auto-approving).
+		 * - Sub-filtered rule already present: the new sub is ADDED to its
+		 *   list (union) so approving a new subcommand extends the filter
+		 *   rather than replacing or dropping it.
 		 */
 		_pushProgramRule(list, program, subs) {
 			const subsArr = (subs && typeof subs === "string" && subs.trim()) ? [subs.trim().toLowerCase()] : null;
 			const existing = list.find(r => (r && typeof r === "object" && r.program ? r.program === program : r === program));
 			if (existing && typeof existing === "object" && existing.program) {
-				// Upgrade an existing broad rule to a subs rule if we now have
-				// a first-arg context and the rule had no subs yet.
-				if (subsArr && !existing.subs) existing.subs = subsArr;
+				if (Array.isArray(existing.subs) && existing.subs.length > 0 && subsArr) {
+					// Sub-filtered rule: extend (union) with the new sub.
+					if (!existing.subs.includes(subsArr[0])) {
+						existing.subs = [...existing.subs, ...subsArr].sort((a, b) => a.localeCompare(b));
+					}
+				}
+				// Broad rule (or no new sub context): already covers this
+				// subcommand -> no-op. Never narrow a broad rule to a subs rule.
 				return;
 			}
 			const rule = { program };
@@ -1954,6 +1971,79 @@ class AIManagerHistory {
 	}
 
 	/**
+	 * Renders a command line with its programs and subcommands (first-args)
+	 * highlighted, using `annotateCommand` for precise character offsets.
+	 * Returns a <Block> with a <code> snippet. Falls back to a plain escaped
+	 * string if annotation yields no spans.
+	 *
+	 * `subTokens` (optional) maps subcommand (first-arg) text for which a
+	 * "only <sub>" checkbox is rendered in the approval card. Matching
+	 * subcommand tokens are tagged with `data-subtoken` so the checkbox's
+	 * hover/focus (see `_bindSubtokenHover`) can highlight the exact token
+	 * (`.agent-cmd-sub-hl` in ai-chat.css).
+	 */
+	_buildAnnotatedSnippet(command, subTokens = null) {
+		const box = new Block();
+		box.className = "agent-cmd-annotated";
+
+		const code = document.createElement("code");
+		code.className = "agent-cmd-annotated-code";
+
+		let html = "";
+		try {
+			const { command: cmd, spans } = annotateCommand(command);
+			if (spans.length === 0) {
+				code.textContent = cmd;
+			} else {
+				let cursor = 0;
+				for (const s of spans) {
+					if (s.start > cursor) html += this._escapeHtml(cmd.slice(cursor, s.start));
+					const cls = s.kind === "program" ? "cmd-hl-program" : "cmd-hl-subcommand";
+					const label = s.kind === "program" ? "Program" : "Subcommand";
+					const dataAttr = (s.kind === "subcommand" && subTokens && subTokens.has(s.name))
+						? ` data-subtoken="${this._escapeHtml(s.name)}"` : "";
+					html += `<span class="cmd-hl ${cls}" title="${label}: ${this._escapeHtml(s.name)}"${dataAttr}>${this._escapeHtml(cmd.slice(s.start, s.end))}</span>`;
+					cursor = s.end;
+				}
+				if (cursor < cmd.length) html += this._escapeHtml(cmd.slice(cursor));
+				code.innerHTML = html;
+			}
+		} catch {
+			code.textContent = String(command || "");
+		}
+
+		box.append(code);
+		return box;
+	}
+
+	/**
+	 * Binds a "only <sub>" checkbox to its subcommand token in the tokenized
+	 * snippet: hovering (or keyboard-focusing) the checkbox highlights the
+	 * matching token with full colour and bold (`.agent-cmd-sub-hl`), and
+	 * unbinds it on leave/blur. CSS alone can't match arbitrary attribute
+	 * values across elements, so the binding is done here. `scope` limits the
+	 * lookup to this card so multiple approval cards don't cross-highlight.
+	 */
+	_bindSubtokenHover(scope, flagLabel, sub) {
+		const token = () => scope.querySelector(
+			`code.agent-cmd-annotated-code span[data-subtoken="${CSS.escape(sub)}"]`);
+		const highlight = () => {
+			const t = token();
+			if (t) t.classList.add("agent-cmd-sub-hl");
+		};
+		const unhighlight = () => {
+			const t = token();
+			if (t) t.classList.remove("agent-cmd-sub-hl");
+		};
+		flagLabel.addEventListener("mouseenter", highlight);
+		flagLabel.addEventListener("mouseleave", unhighlight);
+		// Keyboard accessibility: the checkbox is focusable, so focus/blur
+		// mirror the hover behaviour.
+		flagLabel.addEventListener("focusin", highlight);
+		flagLabel.addEventListener("focusout", unhighlight);
+	}
+
+	/**
 	 * Builds the per-segment approval card: one row per detected program with a
 	 * risk chip and a policy selector, plus a single Ok button.
 	 */
@@ -1970,6 +2060,18 @@ class AIManagerHistory {
 		card.style.flexDirection = "column";
 		card.style.gap = "6px";
 
+		// Tokenized command snippet: programs and subcommands are highlighted
+		// (subdued by default; see ai-chat.css) so the user can see exactly
+		// what will run before deciding. The subcommand tokens that will get
+		// a "only <sub>" checkbox are tagged (data-subtoken) so hovering the
+		// checkbox restores the exact token to full colour + bold.
+		const subTokens = new Map();
+		for (const program of parsed.programs) {
+			const s = parsed.segments.find(x => x.program === program);
+			if (s && s.args && s.args.length > 0) subTokens.set(s.args[0], program);
+		}
+		card.append(this._buildAnnotatedSnippet(message.command, subTokens));
+
 		const selectOptions = [
 			["allow_once", "Allow Once"],
 			["allow_session", "Allow this session"],
@@ -1980,6 +2082,9 @@ class AIManagerHistory {
 		];
 
 		const selectorRefs = new Map();
+		// Per-program "limit to this subcommand" checkbox refs (shown whenever
+		// the program has a first-arg context; only honored for new programs).
+		const subFlagRefs = new Map();
 		for (const program of parsed.programs) {
 			const row = new Block();
 			row.className = "agent-cmd-program-row";
@@ -1989,14 +2094,18 @@ class AIManagerHistory {
 			// own, so classify them directly (unknown → high risk).
 			const seg = parsed.segments.find(s => s.program === program);
 			const { category: risk, reason } = seg ? { category: seg.risk, reason: seg.riskReason } : classifyProgram(program);
-			const chip = new Inline();
-			chip.className = `agent-cmd-risk-chip risk-${risk}`;
-			chip.textContent = risk.toUpperCase();
-			chip.title = reason;
+			// Traffic-light dot: color signals the risk, the (text) reason is
+			// surfaced via the program name's title attribute. Uses Block (not
+			// Inline) because the dot carries no content: the global
+			// `ui-inline:empty { display: none }` rule would hide an empty
+			// inline element and its 10x10 box would never render.
+			const dot = new Block();
+			dot.className = `agent-cmd-risk-dot risk-${risk}`;
 
 			const name = new Inline();
 			name.className = "agent-cmd-program-name";
 			name.textContent = program;
+			name.title = reason;
 
 			// Auditability: surface the subcommand (first-arg) filters already
 			// configured for this program across the merged policy, e.g. allow
@@ -2014,6 +2123,45 @@ class AIManagerHistory {
 			if (allowSubs) addSubChip("allow", allowSubs, "allow");
 			if (blockSubs) addSubChip("block", blockSubs, "block");
 
+			// "New program" check: used for dimming and the flag's tooltip.
+			const isNewProgram = !mergedPolicy.allow.some(r => r.program === program) &&
+				!mergedPolicy.block.some(r => r.program === program);
+			// Focus new programs: rows whose program already has a rule in the
+			// merged policy are dimmed so the ones needing a decision stand out.
+			if (!isNewProgram) row.classList.add("agent-cmd-row-dimmed");
+			// "Limit to this subcommand" flag: shown whenever the invocation
+			// carries a first-arg (subcommand) context — including programs that
+			// already have a subs filter (so a new sub can be added to it). For
+			// NEW programs it decides whether the written rule is subs-limited
+			// (checked) or broad (unchecked); for programs with an existing rule
+			// the handler unions the sub instead. Hidden when there is no
+			// first-arg context.
+			const firstArg = seg && seg.args && seg.args.length > 0 ? seg.args[0] : null;
+			let flagLabel = null;
+			if (firstArg) {
+				const flag = document.createElement("input");
+				flag.type = "checkbox";
+				flag.className = "agent-cmd-limit-flag";
+				flag.title = isNewProgram
+					? `Checked: the rule only applies to \`${program} ${firstArg}\`. Unchecked: the rule applies to every invocation of \`${program}\`.`
+					: `Checked: \`${firstArg}\` is added to the existing ${program} subcommand filter. Unchecked: the existing filter is left unchanged.`;
+				flagLabel = document.createElement("label");
+				flagLabel.className = "agent-cmd-limit-flag-label";
+				flagLabel.title = flag.title;
+				// Visual binding: hovering/focusing this checkbox highlights the
+				// matching subcommand token in the tokenized snippet (full
+				// colour + bold), so the user sees exactly which token the rule
+				// would apply to.
+				this._bindSubtokenHover(card, flagLabel, firstArg);
+				const flagText = document.createElement("span");
+				flagText.className = "agent-cmd-limit-flag-text";
+				flagText.textContent = ` add ${firstArg}`;
+				flagLabel.append(flag, flagText);
+				// Register the checkbox (default unchecked) so the Ok handler can
+				// read the current state at submit time.
+				subFlagRefs.set(program, flag);
+			}
+
 			const sel = document.createElement("select");
 			sel.className = "agent-cmd-policy-select";
 			for (const [value, label] of selectOptions) {
@@ -2025,7 +2173,9 @@ class AIManagerHistory {
 			sel.value = this._initialPolicyValue(program, masterPolicy, sessionPolicy);
 			selectorRefs.set(program, sel);
 
-			row.append(chip, name, subsCell, sel);
+			row.append(dot, name, subsCell);
+			if (flagLabel) row.append(flagLabel);
+			row.append(sel);
 			card.append(row);
 		}
 
@@ -2074,7 +2224,20 @@ class AIManagerHistory {
 				// *_once choices are instance-only (no rule written).
 				// When the program has a first-arg context, the rule carries a
 				// subs filter so only that subcommand is allowed/blocked.
-				const subs = subsContext.get(program);
+				let subs = subsContext.get(program);
+				// The "only <sub>" checkbox decides the rule shape for NEW
+				// programs: checked → subs-limited rule, unchecked → broad rule.
+				// For programs with an existing rule the default first-arg
+				// behavior applies (the handler unions the sub into the existing
+				// filter), so the checkbox is ignored there.
+				const flag = subFlagRefs.get(program);
+				if (flag) {
+					const hasExistingRule = master.allow.some(r => r.program === program) ||
+						master.block.some(r => r.program === program) ||
+						sp.allow.some(r => r.program === program) ||
+						sp.block.some(r => r.program === program);
+					if (!hasExistingRule) subs = flag.checked ? subs : null;
+				}
 				if (choice === "allow_session") this._pushProgramRule(sp.allow, program, subs);
 				else if (choice === "allow_always") this._pushProgramRule(master.allow, program, subs);
 				else if (choice === "block_session") this._pushProgramRule(sp.block, program, subs);
