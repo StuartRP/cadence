@@ -26,7 +26,7 @@ class LlamaCpp extends AI {
             stop: ["</s>", "<|end|>", "<|im_end|>", "Llama:", "User:", "Assistant:"],
             thinkingLevel: "medium",
             maxTurns: 0,
-            slotAffinity: true
+            slotAffinity: false
         };
         this.MAX_CONTEXT_TOKENS = 32768; // Default, will try to query if possible
 
@@ -50,8 +50,8 @@ class LlamaCpp extends AI {
                     { value: "unlimited", label: "Unlimited" }
                 ]
             },
+            slotAffinity: { type: "checkbox", label: "Slot Affinity (reuse KV cache per session)", default: false },
             maxTurns: { type: "number", label: "Max Agent Turns (0 for unlimited)", default: 0 },
-            slotAffinity: { type: "checkbox", label: "Slot Affinity (reuse KV cache per session)", default: true },
             system: { type: "textarea", label: "System Prompt Override", default: "", multiline: true }
         };
     }
