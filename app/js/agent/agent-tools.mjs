@@ -2861,11 +2861,12 @@ Snippet: ${r.content || r.snippet || ""}`;
             case 'exec_command':
                 return await this.runCommand(args.command || args.cmd, args.cwd, sourceId, args.timeoutMs || args.timeout);
             case 'create_implementation_plan': {
-                const targetSessionId = sourceId || window.ui?.aiManager?.activeSessionId;
                 const aiManager = window.ui?.aiManager;
-                const session = (targetSessionId && aiManager?.runningSessions?.get(targetSessionId)?.instance?.session)
-                    || (targetSessionId === aiManager?.activeSessionId ? aiManager?.activeSession : null);
+                const session = this._resolveSession(sourceId);
 
+                if (!session) {
+                    return "Tool Error: Could not resolve source session for the implementation plan. Nothing was written.";
+                }
                 if (session && args.plan) {
                     session.implementationPlan = args.plan.trim();
                     if (args.tasks) {
@@ -2888,10 +2889,8 @@ Snippet: ${r.content || r.snippet || ""}`;
             }
             case 'create_task_list':
             case 'update_task_list': {
-                const targetSessionId = sourceId || window.ui?.aiManager?.activeSessionId;
                 const aiManager = window.ui?.aiManager;
-                const session = (targetSessionId && aiManager?.runningSessions?.get(targetSessionId)?.instance?.session)
-                    || (targetSessionId === aiManager?.activeSessionId ? aiManager?.activeSession : null);
+                const session = this._resolveSession(sourceId);
 
                 const tasksInput = args.tasks || args.taskList || "";
                 if (session && tasksInput) {
@@ -2910,10 +2909,8 @@ Snippet: ${r.content || r.snippet || ""}`;
                 }
 
                 const taskName = (args.taskName || args.task || args.name || "").trim();
-                const targetSessionId = sourceId || window.ui?.aiManager?.activeSessionId;
                 const aiManager = window.ui?.aiManager;
-                const session = (targetSessionId && aiManager?.runningSessions?.get(targetSessionId)?.instance?.session)
-                    || (targetSessionId === aiManager?.activeSessionId ? aiManager?.activeSession : null);
+                const session = this._resolveSession(sourceId);
 
                 if (session && session.taskList && taskName) {
                     const escapedTaskText = taskName.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
