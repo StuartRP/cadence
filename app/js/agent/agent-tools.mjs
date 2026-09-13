@@ -1659,6 +1659,7 @@ Snippet: ${r.content || r.snippet || ""}`;
                     // Set tab to diff view mode automatically with backupId retained for rollback and review
                     targetTab.config.viewMode = "diff";
                     targetTab.config.backupId = backupId;
+                    targetTab.config.sourceSession = activeSession;
 
                     // Focus & Redraw
                     targetTab.click();
@@ -1951,6 +1952,7 @@ Snippet: ${r.content || r.snippet || ""}`;
             // 4. Set tab to diff view mode automatically with backupId retained
             targetTab.config.viewMode = "diff";
             targetTab.config.backupId = backupId;
+            targetTab.config.sourceSession = activeSession;
 
             // 5. Focus & Redraw
             targetTab.click();
@@ -2094,6 +2096,7 @@ Snippet: ${r.content || r.snippet || ""}`;
                 }
                 sourceTab.config.viewMode = "diff";
                 sourceTab.config.backupId = srcBackupId;
+                sourceTab.config.sourceSession = activeSession;
             }
 
             // Handle destination insertion
@@ -2148,6 +2151,7 @@ Snippet: ${r.content || r.snippet || ""}`;
                 targetTab.config.session.setValue(linesToCopy);
                 targetTab.config.viewMode = "diff";
                 delete targetTab.config.backupId;
+                targetTab.config.sourceSession = activeSession;
 
                 if (activeSession) {
                     activeSession.modifiedFiles = activeSession.modifiedFiles || {};
@@ -2239,6 +2243,7 @@ Snippet: ${r.content || r.snippet || ""}`;
 
             targetTab.config.viewMode = "diff";
             targetTab.config.backupId = backupId;
+            targetTab.config.sourceSession = activeSession;
 
             targetTab.click();
             if (window.ui?.renderPlanTasksView) {
@@ -2356,6 +2361,7 @@ Snippet: ${r.content || r.snippet || ""}`;
             targetTab.config.session.setValue(content);
             targetTab.config.viewMode = "diff";
             delete targetTab.config.backupId;
+            targetTab.config.sourceSession = activeSession;
 
             // Track pending AI edits in active session
             if (activeSession) {
@@ -3060,7 +3066,7 @@ Snippet: ${r.content || r.snippet || ""}`;
             await workspaceClient.setSession(session.id, session);
 
             if (window.ui?.sessionArtifactsPanel?.update) {
-                window.ui.sessionArtifactsPanel.update();
+                window.ui.sessionArtifactsPanel.update(session);
             }
 
             return `Checkpoint "${name || "checkpoint"}" created. Current file states are saved as a milestone; subsequent edits can be rolled back to this checkpoint.`;
@@ -3198,7 +3204,7 @@ Snippet: ${r.content || r.snippet || ""}`;
                     window.ui.fileList.refreshFolders();
                 }
                 if (window.ui?.sessionArtifactsPanel?.update) {
-                    window.ui.sessionArtifactsPanel.update();
+                    window.ui.sessionArtifactsPanel.update(session);
                 }
 
                 return `Successfully rolled back "${path}" to ${rollbackDescription}. File content has been restored to its baseline state. Please call read_file before attempting any new edits on this file.`;

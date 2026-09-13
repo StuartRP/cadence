@@ -106,7 +106,9 @@ export default class AIManagerMessageRenderer {
         return args;
     }
 
-    addCodeBlockButtons(responseBlock, messageObject = null) {
+    addCodeBlockButtons(responseBlock, messageObject = null, session = null) {
+        // Source session this message belongs to (not necessarily the active tab).
+        const srcSession = session || this.aiManager.activeSession;
         const preElements = responseBlock.querySelectorAll("pre")
         preElements.forEach((pre, index) => {
             if (pre.querySelector('.code-buttons')) {
@@ -247,8 +249,8 @@ export default class AIManagerMessageRenderer {
                     let exactMatch = null;
                     let partialMatches = [];
 
-                    for (let i = this.aiManager.activeSession.messages.length - 1; i >= 0; i--) {
-                        const msg = this.aiManager.activeSession.messages[i];
+                    for (let i = srcSession.messages.length - 1; i >= 0; i--) {
+                        const msg = srcSession.messages[i];
                         if (msg.type === "file_context" && msg.id) {
                             const normalizedMsgId = msg.id.startsWith('/') ? msg.id.substring(1) : msg.id;
                             if (normalizedMsgId === normalizedTargetPath) {
@@ -304,7 +306,9 @@ export default class AIManagerMessageRenderer {
                         applyDiffButton.title = "Diff applied successfully!";
                         if (messageObject) {
                             messageObject.diffStatuses[index] = true;
-                            await workspaceClient.setSession(this.aiManager.activeSession.id, this.aiManager.activeSession);
+                            if (srcSession) {
+                                await workspaceClient.setSession(srcSession.id, srcSession);
+                            }
                         }
                         this.aiManager.historyManager.addMessage({
                             type: "system_message",
@@ -387,7 +391,7 @@ export default class AIManagerMessageRenderer {
     shouldSkipXmlParsing(message = null, session = null, explicitSkip = null) {
         if (explicitSkip !== null && explicitSkip !== undefined) return explicitSkip;
         if (message && (message.thought !== undefined || message.thoughtSignature || message.isThinking)) return true;
-        const targetSession = session || (message?.sessionId ? this.aiManager.sessions?.get?.(message.sessionId) : null) || this.aiManager.activeSession;
+        const targetSession = session || this.aiManager.activeSession;
         return this.aiManager.isKnownReasoningModel ? this.aiManager.isKnownReasoningModel(targetSession) : false;
     }
 
@@ -455,14 +459,17 @@ export default class AIManagerMessageRenderer {
         return { thinkContent, bodyContent, isClosed };
     }
 
-    renderResponseContent(content, message = null, isNew = false, skipXml = null) {
+    renderResponseContent(content, message = null, isNew = false, skipXml = null, session = null) {
         if (!content && (!message || (!message.toolCalls && !message.thought))) return "";
 
+        // Source session: the session this message belongs to (not necessarily the active tab).
+        const srcSession = session || this.aiManager.activeSession;
+
         let isFailed = false;
-        if (message && this.aiManager.activeSession && this.aiManager.activeSession.messages) {
-            const index = this.aiManager.activeSession.messages.findIndex(m => m.id === message.id);
-            if (index !== -1 && index + 1 < this.aiManager.activeSession.messages.length) {
-                const nextMessage = this.aiManager.activeSession.messages[index + 1];
+        if (message && srcSession && srcSession.messages) {
+            const index = srcSession.messages.findIndex(m => m.id === message.id);
+            if (index !== -1 && index + 1 < srcSession.messages.length) {
+                const nextMessage = srcSession.messages[index + 1];
                 if (nextMessage && nextMessage.type === "tool_response") {
                     const responseContent = nextMessage.content || "";
                     const prefixMatch = responseContent.match(/^\[Tool Response: [^\]]+\]\s*\n\s*/i);
@@ -476,7 +483,7 @@ export default class AIManagerMessageRenderer {
             }
         }
 
-        const shouldSkip = this.shouldSkipXmlParsing(message, null, skipXml);
+        const shouldSkip = this.shouldSkipXmlParsing(message, srcSession, skipXml);
         const { thinkContent, bodyContent, isClosed } = this.extractThoughtAndBody(content, message, shouldSkip);
         let rawContent = bodyContent;
 
@@ -485,10 +492,10 @@ export default class AIManagerMessageRenderer {
 
         if (parsed.planBlock) {
             const planText = rawContent.substring(parsed.planBlock.contentStartIdx, parsed.planBlock.contentEndIdx).trim();
-            if (isNew && planText && this.aiManager.activeSession && this.aiManager.activeSession.implementationPlan !== planText) {
-                this.aiManager.activeSession.implementationPlan = planText;
+            if (isNew && planText && srcSession && srcSession.implementationPlan !== planText) {
+                srcSession.implementationPlan = planText;
 
-                workspaceClient.setSession(this.aiManager.activeSession.id, this.aiManager.activeSession);
+                workspaceClient.setSession(srcSession.id, srcSession);
 
                 if (window.ui.openPlanAndTaskList) {
                     const isOpen = (window.ui.leftTabs?.tabs?.some(t => t.config?.path === "plan_tasks")) ||
@@ -504,10 +511,10 @@ export default class AIManagerMessageRenderer {
         if (parsed.taskListBlock) {
             const tasksText = rawContent.substring(parsed.taskListBlock.contentStartIdx, parsed.taskListBlock.contentEndIdx).trim();
             const formattedTasks = this.formatTaskList(tasksText);
-            if (isNew && formattedTasks && this.aiManager.activeSession && this.aiManager.activeSession.taskList !== formattedTasks) {
-                this.aiManager.activeSession.taskList = formattedTasks;
+            if (isNew && formattedTasks && srcSession && srcSession.taskList !== formattedTasks) {
+                srcSession.taskList = formattedTasks;
                 this.aiManager._updateAgentProgressPanel();
-                workspaceClient.setSession(this.aiManager.activeSession.id, this.aiManager.activeSession);
+                workspaceClient.setSession(srcSession.id, srcSession);
             }
             rangesToRemove.push({ startIdx: parsed.taskListBlock.startIdx, endIdx: parsed.taskListBlock.endIdx });
         }
@@ -515,11 +522,11 @@ export default class AIManagerMessageRenderer {
         let taskListUpdated = false;
         for (const block of parsed.completeTaskBlocks) {
             const taskText = rawContent.substring(block.contentStartIdx, block.contentEndIdx).trim();
-            if (isNew && taskText && this.aiManager.activeSession && this.aiManager.activeSession.taskList) {
+            if (isNew && taskText && srcSession && srcSession.taskList) {
                 const escapedTaskText = taskText.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
                 const checkboxRegex = new RegExp(`([\\-*]\\s*\\[\\s*\\]\\s*)${escapedTaskText}`, 'i');
-                if (checkboxRegex.test(this.aiManager.activeSession.taskList)) {
-                    this.aiManager.activeSession.taskList = this.aiManager.activeSession.taskList.replace(checkboxRegex, (match, bulletGroup) => {
+                if (checkboxRegex.test(srcSession.taskList)) {
+                    srcSession.taskList = srcSession.taskList.replace(checkboxRegex, (match, bulletGroup) => {
                         return bulletGroup.replace(/\[\s*\]/, '[x]') + taskText;
                     });
                     taskListUpdated = true;
@@ -530,7 +537,7 @@ export default class AIManagerMessageRenderer {
 
         if (isNew && taskListUpdated) {
             this.aiManager._updateAgentProgressPanel();
-            workspaceClient.setSession(this.aiManager.activeSession.id, this.aiManager.activeSession);
+            workspaceClient.setSession(srcSession.id, srcSession);
         }
 
         let thinkHtml = "";
@@ -584,7 +591,7 @@ export default class AIManagerMessageRenderer {
                     try { args = JSON.parse(args); } catch(e) { args = {}; }
                 }
 
-                finalHtml += this._renderSingleToolCallCard(toolName, args, tc, tcIdx, message);
+                finalHtml += this._renderSingleToolCallCard(toolName, args, tc, tcIdx, message, srcSession);
             }
         } else if (finalParsed.toolCallBlocks.length > 0) {
             // 2. Fallback for legacy XML tool call blocks in content (e.g. during streaming or unmigrated turns)
@@ -786,13 +793,15 @@ export default class AIManagerMessageRenderer {
         return finalHtml;
     }
 
-    _renderSingleToolCallCard(toolName, args, tc, tcIdx = 0, message = null) {
+    _renderSingleToolCallCard(toolName, args, tc, tcIdx = 0, message = null, session = null) {
+        // Source session: the session this message belongs to (not necessarily the active tab).
+        const srcSession = session || this.aiManager.activeSession;
         let tcFailed = tc?.status === "failed";
         let toolResultDetail = "";
-        if (this.aiManager.activeSession && this.aiManager.activeSession.messages && message) {
-            const index = this.aiManager.activeSession.messages.findIndex(m => m.id === message.id);
-            if (index !== -1 && index + 1 < this.aiManager.activeSession.messages.length) {
-                const nextMessage = this.aiManager.activeSession.messages[index + 1];
+        if (srcSession && srcSession.messages && message) {
+            const index = srcSession.messages.findIndex(m => m.id === message.id);
+            if (index !== -1 && index + 1 < srcSession.messages.length) {
+                const nextMessage = srcSession.messages[index + 1];
                 if (nextMessage && nextMessage.type === "tool_response") {
                     const responseContent = nextMessage.content || "";
                     const sections = responseContent.split(/\n\n---\n\n/);
@@ -810,7 +819,7 @@ export default class AIManagerMessageRenderer {
         // Project management tools
         if (toolName === "create_implementation_plan" || toolName === "update_task_list" || toolName === "complete_task") {
             if (toolName === "create_implementation_plan") {
-                const messages = this.aiManager.activeSession?.messages || [];
+                const messages = srcSession?.messages || [];
                 const status = message ? message.planStatus : (messages.find(m => m.id === message?.id)?.planStatus);
                 let isPending = !status || status === "pending";
                 let cardBg = "color-mix(in srgb, var(--theme) 8%, transparent)";
@@ -1070,13 +1079,15 @@ export default class AIManagerMessageRenderer {
         }
     }
 
-    getModelTurnSummary(content, message = null, skipXml = null) {
+    getModelTurnSummary(content, message = null, skipXml = null, session = null) {
         let thoughtSeconds = null;
         if (message && message.thoughtDurationMs !== undefined) {
             thoughtSeconds = (message.thoughtDurationMs / 1000).toFixed(1);
         }
 
-        const shouldSkip = this.shouldSkipXmlParsing(message, null, skipXml);
+        // Source session: the session this message belongs to (not necessarily the active tab).
+        const srcSession = session || this.aiManager.activeSession;
+        const shouldSkip = this.shouldSkipXmlParsing(message, srcSession, skipXml);
         const { thinkContent, bodyContent, isClosed } = this.extractThoughtAndBody(content, message, shouldSkip);
         if (!isClosed) {
             return "Thinking...";
@@ -1111,10 +1122,10 @@ export default class AIManagerMessageRenderer {
         }
 
         // 2. Resolve status for each tool call from following tool_response messages if not already on the tool call
-        if (toolCallsList.length > 0 && message && this.aiManager.activeSession && this.aiManager.activeSession.messages) {
-            const index = this.aiManager.activeSession.messages.findIndex(m => m.id === message.id);
-            if (index !== -1 && index + 1 < this.aiManager.activeSession.messages.length) {
-                const nextMessage = this.aiManager.activeSession.messages[index + 1];
+        if (toolCallsList.length > 0 && message && srcSession && srcSession.messages) {
+            const index = srcSession.messages.findIndex(m => m.id === message.id);
+            if (index !== -1 && index + 1 < srcSession.messages.length) {
+                const nextMessage = srcSession.messages[index + 1];
                 if (nextMessage && nextMessage.type === "tool_response") {
                     const responseContent = nextMessage.content || "";
                     // Check individual tool response sections if accumulated
@@ -1275,7 +1286,7 @@ export default class AIManagerMessageRenderer {
         return `Model Response`;
     }
 
-    getModelTurnTokens(content, message = null) {
+    getModelTurnTokens(content, message = null, session = null) {
         if (!message) return "";
 
         let outputTokens = 0;
@@ -1299,10 +1310,11 @@ export default class AIManagerMessageRenderer {
         }
 
         let inputTokens = null;
-        if (this.aiManager.activeSession && this.aiManager.activeSession.messages) {
-            const index = this.aiManager.activeSession.messages.findIndex(m => m.id === message.id);
-            if (index !== -1 && index + 1 < this.aiManager.activeSession.messages.length) {
-                const nextMessage = this.aiManager.activeSession.messages[index + 1];
+        const srcSession = session || this.aiManager.activeSession;
+        if (srcSession && srcSession.messages) {
+            const index = srcSession.messages.findIndex(m => m.id === message.id);
+            if (index !== -1 && index + 1 < srcSession.messages.length) {
+                const nextMessage = srcSession.messages[index + 1];
                 if (nextMessage && nextMessage.type === "tool_response") {
                     if (typeof nextMessage.tokenCount === 'number') {
                         inputTokens = nextMessage.tokenCount;
@@ -1649,10 +1661,10 @@ export default class AIManagerMessageRenderer {
      * @param {Object} message 
      * @param {boolean} isNew 
      */
-    renderResponseSegment(containerDiv, content, message, isNew = false, skipXml = null) {
+    renderResponseSegment(containerDiv, content, message, isNew = false, skipXml = null, session = null) {
         if (!containerDiv) return;
 
-        const shouldSkip = this.shouldSkipXmlParsing(message, null, skipXml);
+        const shouldSkip = this.shouldSkipXmlParsing(message, session, skipXml);
         const { thinkContent, bodyContent, isClosed } = this.extractThoughtAndBody(content, message, shouldSkip);
 
         // Check if an earlier sibling segment in this turn already hosts the thought block
@@ -1778,7 +1790,7 @@ export default class AIManagerMessageRenderer {
                             if (typeof args === 'string') {
                                 try { args = JSON.parse(args); } catch(e) { args = {}; }
                             }
-                            bodyHtml += this._renderSingleToolCallCard(toolName, args, tc, tcIdx, message);
+                            bodyHtml += this._renderSingleToolCallCard(toolName, args, tc, tcIdx, message, session);
                         }
                     } else if (bodyContent.length > 0) {
                         bodyHtml = this.aiManager.md.render(shouldSkip ? this.escapeFauxTags(bodyContent) : bodyContent);
@@ -1793,7 +1805,7 @@ export default class AIManagerMessageRenderer {
                 const nonThoughtMessage = (message && (message.thought || message.isThinking))
                     ? { ...message, thought: "", isThinking: false }
                     : message;
-                containerDiv.innerHTML = this.renderResponseContent(bodyContent, nonThoughtMessage, isNew, shouldSkip);
+                containerDiv.innerHTML = this.renderResponseContent(bodyContent, nonThoughtMessage, isNew, shouldSkip, session);
             }
         }
     }

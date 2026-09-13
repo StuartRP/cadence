@@ -315,6 +315,10 @@ export class DiffViewPanel extends Block {
         this.activeFilePath = filePath || tab?.config?.path || "";
         this.activeTab = tab;
 
+        // Resolve the source AI session for this diff (the session that made the edits),
+        // falling back to the active session when the tab carries no source session.
+        this.activeSourceSession = tab?.config?.sourceSession || window.ui?.aiManager?.activeSession;
+
         const normalize = (p) => p ? p.replace(/\\/g, '/').replace(/\/+/g, '/').replace(/^\//, '').replace(/\/$/, '') : '';
         const pathsMatch = (p1, p2) => {
             const n1 = normalize(p1);
@@ -351,9 +355,9 @@ export class DiffViewPanel extends Block {
             const isReloadDiff = tab && tab.config?.fileModified === true;
             const isForgivenessMode = !isReloadDiff && !!backupId;
             const isAIPendingEdits = (() => {
-                const activeSession = window.ui?.aiManager?.activeSession;
-                if (activeSession && activeSession.pendingEdits && this.activeFilePath) {
-                    return !!Object.keys(activeSession.pendingEdits).find(k => pathsMatch(k, this.activeFilePath));
+                const sourceSession = this.activeSourceSession;
+                if (sourceSession && sourceSession.pendingEdits && this.activeFilePath) {
+                    return !!Object.keys(sourceSession.pendingEdits).find(k => pathsMatch(k, this.activeFilePath));
                 }
                 return false;
             })();
@@ -382,12 +386,12 @@ export class DiffViewPanel extends Block {
                 }
             } else if (isForgivenessMode) {
                 // Populate checkpoint selector dropdown for multi-checkpoint navigation
-                const activeSession = window.ui?.aiManager?.activeSession;
+                const sourceSession = this.activeSourceSession;
                 let fileBackups = [];
-                if (activeSession?.modifiedFiles && this.activeFilePath) {
-                    const matchedKey = Object.keys(activeSession.modifiedFiles).find(k => pathsMatch(k, this.activeFilePath));
+                if (sourceSession?.modifiedFiles && this.activeFilePath) {
+                    const matchedKey = Object.keys(sourceSession.modifiedFiles).find(k => pathsMatch(k, this.activeFilePath));
                     if (matchedKey) {
-                        fileBackups = activeSession.modifiedFiles[matchedKey] || [];
+                        fileBackups = sourceSession.modifiedFiles[matchedKey] || [];
                     }
                 }
 
@@ -863,8 +867,8 @@ export class DiffViewPanel extends Block {
                             }
                         }
 
-                        // Mark as rolled back in the session modifiedFiles state
-                        const session = ui.aiManager.activeSession;
+                        // Mark as rolled back in the source session's modifiedFiles state
+                        const session = this.activeSourceSession || ui.aiManager.activeSession;
                         if (session && session.modifiedFiles) {
                             const matchedKey = Object.keys(session.modifiedFiles).find(k => pathsMatch(k, filePath));
                             if (matchedKey) {
@@ -929,17 +933,18 @@ export class DiffViewPanel extends Block {
                         const confirmed = await window.modal.confirm(`Are you sure you want to discard all pending changes to ${filename}?`, "Discard Changes");
                         if (!confirmed) return;
 
-                        const activeSession = window.ui?.aiManager?.activeSession;
-                        if (activeSession && activeSession.pendingEdits) {
-                            const matchedKey = Object.keys(activeSession.pendingEdits).find(k => pathsMatch(k, filePath));
-                            if (matchedKey) {
-                                delete activeSession.pendingEdits[matchedKey];
-                                await workspaceClient.setSession(activeSession.id, activeSession);
-                            }
-                        }
+                        // Target the *source* session that produced these edits, not the active tab
+                        const sourceSession = this.activeSourceSession || window.ui?.aiManager?.activeSession;
+                        if (sourceSession && sourceSession.pendingEdits) {
+                                    const matchedKey = Object.keys(sourceSession.pendingEdits).find(k => pathsMatch(k, filePath));
+                                    if (matchedKey) {
+                                        delete sourceSession.pendingEdits[matchedKey];
+                                        await workspaceClient.setSession(sourceSession.id, sourceSession);
+                                    }
+                                }
 
-                        if (tab && tab.config?.session) {
-                            tab.config.session.setValue(originalContent);
+                                if (tab && tab.config?.session) {
+                                    tab.config.session.setValue(originalContent);
                             tab.changed = false;
                             tab.config.viewMode = "edit";
                             tab.click();
@@ -961,12 +966,13 @@ export class DiffViewPanel extends Block {
                                 tab.config.session.baseValue = tab.config.session.getValue();
                                 tab.changed = false;
 
-                                const activeSession = window.ui?.aiManager?.activeSession;
-                                if (activeSession && activeSession.pendingEdits) {
-                                    const matchedKey = Object.keys(activeSession.pendingEdits).find(k => pathsMatch(k, filePath));
+                                // Target the *source* session that produced these edits, not the active tab
+                                const sourceSession = this.activeSourceSession || window.ui?.aiManager?.activeSession;
+                                if (sourceSession && sourceSession.pendingEdits) {
+                                    const matchedKey = Object.keys(sourceSession.pendingEdits).find(k => pathsMatch(k, filePath));
                                     if (matchedKey) {
-                                        delete activeSession.pendingEdits[matchedKey];
-                                        await workspaceClient.setSession(activeSession.id, activeSession);
+                                        delete sourceSession.pendingEdits[matchedKey];
+                                        await workspaceClient.setSession(sourceSession.id, sourceSession);
                                     }
                                 }
 

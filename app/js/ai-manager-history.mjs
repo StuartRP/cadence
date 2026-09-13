@@ -36,6 +36,31 @@ class AIManagerHistory {
 		return this.manager.activeSession?.messages || [];
 	}
 
+	/**
+	 * Resolves a session object by ID, preferring the in-memory running-session reference
+	 * (so mutations stay in sync with the live agent), then the active session, then a
+	 * network fetch. Returns null if the session cannot be resolved.
+	 * @param {string} sessionId
+	 * @returns {Promise<object|null>}
+	 */
+	async _resolveSessionById(sessionId) {
+		if (!sessionId) return null;
+		const running = this.manager.runningSessions.get(sessionId);
+		if (running) {
+			const s = running.session || (running.instance && running.instance.session);
+			if (s) return s;
+		}
+		if (this.manager.activeSession && this.manager.activeSession.id === sessionId) {
+			return this.manager.activeSession;
+		}
+		try {
+			return await workspaceClient.getSession(sessionId);
+		} catch (e) {
+			console.warn("[AIManagerHistory] _resolveSessionById failed for", sessionId, e);
+			return null;
+		}
+	}
+
 	get activeStreamingBlock() {
 		const runningSession = this.manager.runningSessions.get(this.manager.activeSessionId);
 		if (runningSession) return runningSession.responseBlock;
@@ -288,7 +313,7 @@ class AIManagerHistory {
 				if (message.type === 'file_context') continue;
 				if (summarizedIds.has(message.id)) continue;
 				
-				const element = this._createMessageElement(message, i);
+				const element = this._createMessageElement(message, i, false, subSession);
 				if (!element) continue;
 
 				if (message.type === "model" || message.type === "error") {
@@ -338,8 +363,16 @@ class AIManagerHistory {
 			return;
 		}
 
+		// Scope the parent branch to the *viewed* session (not necessarily the active tab).
+		// `viewedSessionId` is the sub-agent id when one is being viewed, else the active
+		// session id. Resolve its messages locally so collapse-last-turn state and the
+		// streaming-detection below operate on the viewed session, not the active tab.
+		const viewedSessionId = this.manager.activeSession?.activeSubAgentSessionId || this.manager.activeSessionId;
+		const viewedSession = await this._resolveSessionById(viewedSessionId);
+		const history = (viewedSession && viewedSession.messages) || this.chatHistory;
+
 		// If history is empty, show the empty state background.
-		if (this.chatHistory.length === 0) {
+		if (history.length === 0) {
 			this.manager._emptyStateElement.style.display = 'flex';
 			return; // Nothing else to render
 		}
@@ -371,16 +404,16 @@ class AIManagerHistory {
 		// Collect IDs of messages that have been summarized to skip rendering them directly in the chat history
 		const summarizedIds = new Set();
 		let lastSummarizedIdx = -1;
-		const summaries = this.chatHistory.filter(msg => msg.type === "cycle_summary");
+		const summaries = history.filter(msg => msg.type === "cycle_summary");
 		for (const summary of summaries) {
 			const startId = summary.cycleStartMsgId;
 			const endId = summary.cycleEndMsgId;
 			if (startId && endId) {
-				const startIdx = this.chatHistory.findIndex(m => m.id === startId);
-				const endIdx = this.chatHistory.findIndex(m => m.id === endId);
+				const startIdx = history.findIndex(m => m.id === startId);
+				const endIdx = history.findIndex(m => m.id === endId);
 				if (startIdx !== -1 && endIdx !== -1 && startIdx <= endIdx) {
 					for (let j = startIdx; j <= endIdx; j++) {
-						summarizedIds.add(this.chatHistory[j].id);
+						summarizedIds.add(history[j].id);
 					}
 					if (endIdx > lastSummarizedIdx) {
 						lastSummarizedIdx = endIdx;
@@ -393,15 +426,17 @@ class AIManagerHistory {
 		// and determine the allowed message IDs.
 		// Rule: If currently generating, active turn is the streaming block, so keep only the previous 1 completed turn from history.
 		// If idle (not generating), keep the last 2 completed turns (current turn + previous turn).
-		const runningSession = this.manager.runningSessions.get(this.manager.activeSessionId);
+		// Scope streaming-detection to the *viewed* session so collapse-last-turn state
+		// does not cross between the active tab and a different viewed/source session.
+		const runningSession = this.manager.runningSessions.get(viewedSessionId) || this.manager.runningSessions.get(this.manager.activeSessionId);
 		const hasActiveStreaming = !!(runningSession && runningSession.responseBlock);
 		const condensedAllowedIds = new Set();
 
 		if (this.manager.condensedViewMode && !this.manager.rawViewMode) {
 			// Find all unsummarized, non-file_context, non-cycle_summary messages (the active cycle)
 			const activeCycleMessages = [];
-			for (let i = lastSummarizedIdx + 1; i < this.chatHistory.length; i++) {
-				const msg = this.chatHistory[i];
+			for (let i = lastSummarizedIdx + 1; i < history.length; i++) {
+				const msg = history[i];
 				if (msg.type !== 'file_context' && !summarizedIds.has(msg.id) && msg.type !== 'cycle_summary') {
 					activeCycleMessages.push(msg);
 				}
@@ -440,8 +475,8 @@ class AIManagerHistory {
 		let cycleSummariesWrapper = null;
 		const cycleSummaryMessages = [];
 		if (!this.manager.rawViewMode) {
-			for (let i = 0; i < this.chatHistory.length; i++) {
-				const message = this.chatHistory[i];
+			for (let i = 0; i < history.length; i++) {
+				const message = history[i];
 				if (message.type === "cycle_summary") {
 					cycleSummaryMessages.push({ message, index: i });
 				}
@@ -481,7 +516,7 @@ class AIManagerHistory {
 				groupBody.className = "cycle-summaries-group-body";
 
 				for (const { message, index } of cycleSummaryMessages) {
-					const summaryElement = this._createMessageElement(message, index);
+					const summaryElement = this._createMessageElement(message, index, false, viewedSession);
 					if (summaryElement) {
 						groupBody.append(summaryElement);
 					}
@@ -504,8 +539,8 @@ class AIManagerHistory {
 		let currentModelTurnContent = null;
 		let cycleSummariesAppended = false;
 
-		for (let i = 0; i < this.chatHistory.length; i++) {
-			const message = this.chatHistory[i];
+		for (let i = 0; i < history.length; i++) {
+			const message = history[i];
 			if (message.type === 'file_context') continue;
 			if (summarizedIds.has(message.id)) continue;
 
@@ -525,7 +560,7 @@ class AIManagerHistory {
 			
 			const element = this.manager.rawViewMode
 				? this._createExpanderMessageElement(message, i)
-				: this._createMessageElement(message, i); // No isNewMessage for full render
+				: this._createMessageElement(message, i, false, viewedSession); // No isNewMessage for full render
 
 			if (!element) continue;
 
@@ -594,14 +629,14 @@ class AIManagerHistory {
 			}
 		});
 
-		// Render pending queued prompts
-		if (this.manager.activeSession && this.manager.activeSession.promptQueue) {
-			for (const pendingMsg of this.manager.activeSession.promptQueue) {
+		// Render pending queued prompts (scoped to the viewed session, not the active tab)
+		if (viewedSession && viewedSession.promptQueue) {
+			for (const pendingMsg of viewedSession.promptQueue) {
 				const pendingElement = this._createMessageElement({
 					id: pendingMsg.id,
 					type: "pending",
 					content: pendingMsg.content
-				});
+				}, 0, false, viewedSession);
 				if (pendingElement) {
 					this.conversationArea.append(pendingElement);
 				}
@@ -740,8 +775,10 @@ class AIManagerHistory {
 			this._localActiveStreamingBlock = element;
 			return element;
 		} else {
-			// If there are existing model turn blocks in the DOM, auto-collapse them unless manually expanded by the user
-			if (this.conversationArea) {
+			// If there are existing model turn blocks in the DOM, auto-collapse them unless manually expanded by the user.
+			// Only do this when the target session is the one currently being viewed — a background session's
+			// new turn must not collapse the active tab's open turn wrappers (the DOM shows the active tab).
+			if (this.conversationArea && this.manager.isSessionViewed(targetSessionId)) {
 				const existingTurnBlocks = this.conversationArea.querySelectorAll(".model-turn-block");
 				existingTurnBlocks.forEach(b => {
 					if (!b.dataset.manuallyExpanded) {
@@ -822,8 +859,8 @@ class AIManagerHistory {
 				};
 
 				// Update live summary
-				summarySpan.innerHTML = this.manager.messageRenderer.getModelTurnSummary(fullResponse, liveMsgObj, skipXml);
-				tokensSpan.innerHTML = this.manager.messageRenderer.getModelTurnTokens(fullResponse, liveMsgObj);
+				summarySpan.innerHTML = this.manager.messageRenderer.getModelTurnSummary(fullResponse, liveMsgObj, skipXml, targetSession);
+				tokensSpan.innerHTML = this.manager.messageRenderer.getModelTurnTokens(fullResponse, liveMsgObj, targetSession);
 
 				const segments = this.manager.messageRenderer.segmentContent(fullResponse, skipXml);
 				
@@ -847,7 +884,7 @@ class AIManagerHistory {
 						thought: segmentIndex === 0 ? (thought || "") : "", 
 						isThinking: false 
 					};
-					this.manager.messageRenderer.renderResponseSegment(responseBlock.activeSegmentDiv, finalizedText, finalizedMsgObj, true, skipXml);
+					this.manager.messageRenderer.renderResponseSegment(responseBlock.activeSegmentDiv, finalizedText, finalizedMsgObj, true, skipXml, targetSession);
 					// Attach code block buttons once the segment is closed/finalized
 					this.manager.messageRenderer.addCodeBlockButtons(responseBlock.activeSegmentDiv);
 					
@@ -874,7 +911,7 @@ class AIManagerHistory {
 					? liveMsgObj
 					: { ...liveMsgObj, thought: "", isThinking: false };
 
-				this.manager.messageRenderer.renderResponseSegment(responseBlock.activeSegmentDiv, activeText, activeMsgObj, true, skipXml);
+				this.manager.messageRenderer.renderResponseSegment(responseBlock.activeSegmentDiv, activeText, activeMsgObj, true, skipXml, targetSession);
 				// NOTE: Action buttons are delayed until this block is closed by new segments or generation finishes
 
 				if (wasUserClosed) {
@@ -924,14 +961,14 @@ class AIManagerHistory {
 				const skipXml = this.manager.isKnownReasoningModel(targetSession);
 
 				responseBlock.classList.remove("streaming");
-				summarySpan.innerHTML = this.manager.messageRenderer.getModelTurnSummary(fullResponse, finalizedMessage, skipXml);
-				contentDiv.innerHTML = this.manager.messageRenderer.renderResponseContent(fullResponse, finalizedMessage, true, skipXml);
+				summarySpan.innerHTML = this.manager.messageRenderer.getModelTurnSummary(fullResponse, finalizedMessage, skipXml, targetSession);
+				contentDiv.innerHTML = this.manager.messageRenderer.renderResponseContent(fullResponse, finalizedMessage, true, skipXml, targetSession);
 				// Attach code block buttons to the complete finalized message
-				this.manager.messageRenderer.addCodeBlockButtons(contentDiv, finalizedMessage);
+				this.manager.messageRenderer.addCodeBlockButtons(contentDiv, finalizedMessage, targetSession);
 
 				const tokenCount = typeof finalizedMessage.tokenCount === 'number' ? finalizedMessage.tokenCount : this.ai.estimateTokens([finalizedMessage]);
 				responseBlock.setAttribute("title", `Tokens: ${tokenCount}`);
-				tokensSpan.innerHTML = this.manager.messageRenderer.getModelTurnTokens(fullResponse, finalizedMessage);
+				tokensSpan.innerHTML = this.manager.messageRenderer.getModelTurnTokens(fullResponse, finalizedMessage, targetSession);
 
 				// Asynchronously tokenize the finalized message and update counts
 				this.tokenizeMessage(finalizedMessage, this.manager.runningSessions.get(targetSessionId)?.instance?.session || (this.manager.activeSessionId === targetSessionId ? this.manager.activeSession : null)).catch(err => {
@@ -961,6 +998,9 @@ class AIManagerHistory {
 		if (!message.id) {
 			message.id = crypto.randomUUID();
 		}
+
+		// Source session this message belongs to (not necessarily the active tab).
+		const targetSession = session || this.manager.activeSession;
 
 		let element;
 		const tokenCount = typeof message.tokenCount === 'number' ? message.tokenCount : this.ai.estimateTokens([message]);
@@ -1123,11 +1163,11 @@ class AIManagerHistory {
 
 			const summarySpan = new Inline();
 			summarySpan.className = "model-turn-summary";
-			summarySpan.innerHTML = message.type === "error" ? `Error: ${this._escapeHtml(message.content || "")}` : this.manager.messageRenderer.getModelTurnSummary(message.content, message);
+			summarySpan.innerHTML = message.type === "error" ? `Error: ${this._escapeHtml(message.content || "")}` : this.manager.messageRenderer.getModelTurnSummary(message.content, message, null, targetSession);
 
 			const tokensSpan = new Inline();
 			tokensSpan.className = "turn-tokens-container";
-			tokensSpan.innerHTML = message.type === "error" ? "" : this.manager.messageRenderer.getModelTurnTokens(message.content, message);
+			tokensSpan.innerHTML = message.type === "error" ? "" : this.manager.messageRenderer.getModelTurnTokens(message.content, message, targetSession);
 
 			const replayButton = this._createSingleReplayButton(message.id, true);
 
@@ -1139,9 +1179,8 @@ class AIManagerHistory {
 			// Content Body
 			const contentDiv = new Block();
 			contentDiv.className = "model-turn-content";
-			const targetSession = session || (message?.sessionId ? this.manager.sessions?.get?.(message.sessionId) : null) || this.manager.activeSession;
 			const skipXml = this.manager.isKnownReasoningModel(targetSession);
-			contentDiv.innerHTML = this.manager.messageRenderer.renderResponseContent(message.content, message, isNew, skipXml);
+			contentDiv.innerHTML = this.manager.messageRenderer.renderResponseContent(message.content, message, isNew, skipXml, targetSession);
 
 			header.onclick = (e) => {
 				if (e.target.closest('.delete-history-button') || e.target.closest('.delete-turn-btn') || e.target.closest('.replay-history-button') || e.target.closest('.replay-turn-btn')) return;
@@ -1157,7 +1196,7 @@ class AIManagerHistory {
 			element.append(header, contentDiv);
 			
 			if (message.type === "model") {
-				this.manager.messageRenderer.addCodeBlockButtons(contentDiv, message);
+				this.manager.messageRenderer.addCodeBlockButtons(contentDiv, message, targetSession);
 
 				// Add manual cycle summarization trigger button if this model message called "done" and isn't summarized yet
 				if (message.toolCalls?.some(tc => (tc.functionCall?.name || tc.name) === "done")) {
@@ -2835,7 +2874,7 @@ class AIManagerHistory {
 					if (modelBlock) {
 						const tokensSpan = modelBlock.querySelector('.turn-tokens-container');
 						if (tokensSpan) {
-							tokensSpan.innerHTML = this.manager.messageRenderer.getModelTurnTokens(message.content, message);
+							tokensSpan.innerHTML = this.manager.messageRenderer.getModelTurnTokens(message.content, message, targetSession);
 						}
 					}
 
@@ -2849,7 +2888,7 @@ class AIManagerHistory {
 								if (prevBlock) {
 									const tokensSpan = prevBlock.querySelector('.turn-tokens-container');
 									if (tokensSpan) {
-										tokensSpan.innerHTML = this.manager.messageRenderer.getModelTurnTokens(prevMsg.content, prevMsg);
+										tokensSpan.innerHTML = this.manager.messageRenderer.getModelTurnTokens(prevMsg.content, prevMsg, targetSession);
 									}
 								}
 							}

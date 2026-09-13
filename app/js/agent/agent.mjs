@@ -1110,15 +1110,15 @@ export class Agent {
 				if (modelMessage && responseBlock) {
 					const contentDiv = responseBlock.querySelector('.model-turn-content');
 					const targetContainer = contentDiv || responseBlock;
-					targetContainer.innerHTML = aiManager.messageRenderer.renderResponseContent(responseContent, modelMessage, true);
-					aiManager.messageRenderer.addCodeBlockButtons(targetContainer, modelMessage);
+					targetContainer.innerHTML = aiManager.messageRenderer.renderResponseContent(responseContent, modelMessage, true, null, session);
+					aiManager.messageRenderer.addCodeBlockButtons(targetContainer, modelMessage, session);
 					const summarySpan = responseBlock.querySelector('.model-turn-summary');
 					if (summarySpan) {
-						summarySpan.innerHTML = aiManager.messageRenderer.getModelTurnSummary(responseContent, modelMessage);
+						summarySpan.innerHTML = aiManager.messageRenderer.getModelTurnSummary(responseContent, modelMessage, null, session);
 					}
 					const tokensSpan = responseBlock.querySelector('.turn-tokens-container');
 					if (tokensSpan) {
-						tokensSpan.innerHTML = aiManager.messageRenderer.getModelTurnTokens(responseContent, modelMessage);
+						tokensSpan.innerHTML = aiManager.messageRenderer.getModelTurnTokens(responseContent, modelMessage, session);
 					}
 				}
 

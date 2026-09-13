@@ -55,7 +55,7 @@ export class UIAccordion extends Block {
         // Click handler to expand/collapse
         this.header.onclick = (e) => {
             if (e.target.closest("button") || e.target.closest(".header-actions")) return;
-            const session = ui.aiManager.activeSession;
+            const session = (typeof this.getTargetSession === "function") ? this.getTargetSession() : ui.aiManager.activeSession;
             if (!session) return;
             session._accordionStates = session._accordionStates || { settings: false, plan: true, tasks: true, backups: true, scratchpad: true };
 
@@ -87,6 +87,7 @@ export class SessionArtifactsPanel extends Block {
         super();
         this.classList.add("plan-tasks-view");
         this.isUpdating = false;
+        this.sourceSession = null;
 
         // Active Ace Editor instances
         this.planEditorInstance = null;
@@ -112,6 +113,20 @@ export class SessionArtifactsPanel extends Block {
 
         // 5. Implementation Plan Accordion
         this._buildPlanAccordion();
+
+        // Point every accordion's expand/collapse state at the source (not active) session.
+        const accTarget = () => this._getTargetSession();
+        this.settingsAccordion.getTargetSession = accTarget;
+        this.backupsAccordion.getTargetSession = accTarget;
+        this.scratchpadAccordion.getTargetSession = accTarget;
+        this.tasksAccordion.getTargetSession = accTarget;
+        this.planAccordion.getTargetSession = accTarget;
+    }
+
+    // Returns the session this panel is currently targeting (the source session of the
+    // most recent update), falling back to the active session when none is set.
+    _getTargetSession() {
+        return this.sourceSession || ui.aiManager.activeSession;
     }
 
     _buildSettingsAccordion() {
@@ -261,11 +276,12 @@ export class SessionArtifactsPanel extends Block {
         // Listeners
         this.agentModeCheckbox.addEventListener("change", async (e) => {
             const checked = e.target.checked;
+            const session = this._getTargetSession();
             ui.aiManager.agentMode = checked;
             localStorage.setItem("aiAgentMode", checked);
-            if (ui.aiManager.activeSession) {
-                ui.aiManager.activeSession.agentMode = checked;
-                await workspaceClient.setSession(ui.aiManager.activeSession.id, ui.aiManager.activeSession);
+            if (session) {
+                session.agentMode = checked;
+                await workspaceClient.setSession(session.id, session);
             }
             const mainCheck = document.querySelector("#agent-mode-checkbox");
             if (mainCheck) mainCheck.checked = checked;
@@ -274,11 +290,12 @@ export class SessionArtifactsPanel extends Block {
 
         this.planningModeCheckbox.addEventListener("change", async (e) => {
             const checked = e.target.checked;
+            const session = this._getTargetSession();
             ui.aiManager.planningMode = checked;
             localStorage.setItem("aiPlanningMode", checked);
-            if (ui.aiManager.activeSession) {
-                ui.aiManager.activeSession.planningMode = checked;
-                await workspaceClient.setSession(ui.aiManager.activeSession.id, ui.aiManager.activeSession);
+            if (session) {
+                session.planningMode = checked;
+                await workspaceClient.setSession(session.id, session);
             }
             const mainCheck = document.querySelector("#planning-mode-checkbox");
             if (mainCheck) mainCheck.checked = checked;
@@ -287,13 +304,14 @@ export class SessionArtifactsPanel extends Block {
 
         this.forgivenessModeCheckbox.addEventListener("change", async (e) => {
             const checked = e.target.checked;
+            const session = this._getTargetSession();
             window.ui.aiManager.forgivenessMode = checked;
             localStorage.setItem("aiForgivenessMode", checked);
-            if (window.ui.aiManager.activeSession) {
-                window.ui.aiManager.activeSession.forgivenessMode = checked;
-                await workspaceClient.setSession(window.ui.aiManager.activeSession.id, window.ui.aiManager.activeSession);
+            if (session) {
+                session.forgivenessMode = checked;
+                await workspaceClient.setSession(session.id, session);
             }
-            this._updateOpenEditsReviewState(checked, window.ui.aiManager.activeSession?.openEditsForReview);
+            this._updateOpenEditsReviewState(checked, session?.openEditsForReview);
             if (window.ui) {
                 const leftActive = window.ui.leftTabs?.activeTab;
                 if (leftActive && window.ui.leftHolder?.updateNoticeBar) {
@@ -308,44 +326,49 @@ export class SessionArtifactsPanel extends Block {
 
         this.openEditsForReviewCheckbox.addEventListener("change", async (e) => {
             const checked = e.target.checked;
+            const session = this._getTargetSession();
             window.ui.aiManager.openEditsForReview = checked;
-            if (window.ui.aiManager.activeSession) {
-                window.ui.aiManager.activeSession.openEditsForReview = checked;
-                await workspaceClient.setSession(window.ui.aiManager.activeSession.id, window.ui.aiManager.activeSession);
+            if (session) {
+                session.openEditsForReview = checked;
+                await workspaceClient.setSession(session.id, session);
             }
         });
 
         this.allowSubAgentsCheckbox.addEventListener("change", async (e) => {
             const checked = e.target.checked;
-            if (ui.aiManager.activeSession) {
-                ui.aiManager.activeSession.allowSubAgents = checked;
-                await workspaceClient.setSession(ui.aiManager.activeSession.id, ui.aiManager.activeSession);
+            const session = this._getTargetSession();
+            if (session) {
+                session.allowSubAgents = checked;
+                await workspaceClient.setSession(session.id, session);
             }
         });
 
         this.allowRunCommandCheckbox.addEventListener("change", async (e) => {
             const checked = e.target.checked;
+            const session = this._getTargetSession();
             ui.aiManager.allowRunCommand = checked;
             localStorage.setItem("aiAllowRunCommand", checked);
-            if (ui.aiManager.activeSession) {
-                ui.aiManager.activeSession.allowRunCommand = checked;
-                await workspaceClient.setSession(ui.aiManager.activeSession.id, ui.aiManager.activeSession);
+            if (session) {
+                session.allowRunCommand = checked;
+                await workspaceClient.setSession(session.id, session);
             }
         });
 
         this.autoMilestonesCheckbox.addEventListener("change", async (e) => {
             const checked = e.target.checked;
-            if (ui.aiManager.activeSession) {
-                ui.aiManager.activeSession.autoMilestones = checked;
-                await workspaceClient.setSession(ui.aiManager.activeSession.id, ui.aiManager.activeSession);
+            const session = this._getTargetSession();
+            if (session) {
+                session.autoMilestones = checked;
+                await workspaceClient.setSession(session.id, session);
             }
         });
 
         this.autoRollbackCheckbox.addEventListener("change", async (e) => {
             const checked = e.target.checked;
-            if (ui.aiManager.activeSession) {
-                ui.aiManager.activeSession.autoRollbackOnFailures = checked;
-                await workspaceClient.setSession(ui.aiManager.activeSession.id, ui.aiManager.activeSession);
+            const session = this._getTargetSession();
+            if (session) {
+                session.autoRollbackOnFailures = checked;
+                await workspaceClient.setSession(session.id, session);
             }
         });
 
@@ -354,9 +377,10 @@ export class SessionArtifactsPanel extends Block {
             if (isNaN(val) || val < 1) val = 1;
             if (val > 10) val = 10;
             e.target.value = val;
-            if (ui.aiManager.activeSession) {
-                ui.aiManager.activeSession.autoRollbackFailureThreshold = val;
-                await workspaceClient.setSession(ui.aiManager.activeSession.id, ui.aiManager.activeSession);
+            const session = this._getTargetSession();
+            if (session) {
+                session.autoRollbackFailureThreshold = val;
+                await workspaceClient.setSession(session.id, session);
             }
         });
 
@@ -365,9 +389,10 @@ export class SessionArtifactsPanel extends Block {
             if (isNaN(val) || val < 10) val = 10;
             if (val > 90) val = 90;
             e.target.value = val;
-            if (ui.aiManager.activeSession) {
-                ui.aiManager.activeSession.contextPrefillMinPercentage = val;
-                await workspaceClient.setSession(ui.aiManager.activeSession.id, ui.aiManager.activeSession);
+            const session = this._getTargetSession();
+            if (session) {
+                session.contextPrefillMinPercentage = val;
+                await workspaceClient.setSession(session.id, session);
             }
         });
 
@@ -376,9 +401,10 @@ export class SessionArtifactsPanel extends Block {
             if (isNaN(val) || val < 20) val = 20;
             if (val > 98) val = 98;
             e.target.value = val;
-            if (ui.aiManager.activeSession) {
-                ui.aiManager.activeSession.contextPrefillMaxPercentage = val;
-                await workspaceClient.setSession(ui.aiManager.activeSession.id, ui.aiManager.activeSession);
+            const session = this._getTargetSession();
+            if (session) {
+                session.contextPrefillMaxPercentage = val;
+                await workspaceClient.setSession(session.id, session);
             }
         });
     }
@@ -416,7 +442,7 @@ export class SessionArtifactsPanel extends Block {
 
         this.planBtn.onclick = async (e) => {
             if (e) e.stopPropagation();
-            const session = ui.aiManager.activeSession;
+            const session = this._getTargetSession();
             if (!session) return;
 
             if (!this.planEditorInstance) {
@@ -487,7 +513,7 @@ export class SessionArtifactsPanel extends Block {
 
         this.tasksBtn.onclick = async (e) => {
             if (e) e.stopPropagation();
-            const session = ui.aiManager.activeSession;
+            const session = this._getTargetSession();
             if (!session) return;
 
             if (!this.tasksEditorInstance) {
@@ -569,7 +595,7 @@ export class SessionArtifactsPanel extends Block {
 
         this.clearScratchpadBtn.onclick = async (e) => {
             if (e) e.stopPropagation();
-            const session = ui.aiManager.activeSession;
+            const session = this._getTargetSession();
             if (!session || !session.scratchpad) return;
 
             const confirmed = await window.modal.confirm("Are you sure you want to clear the scratchpad notes?", "Clear Scratchpad");
@@ -604,7 +630,7 @@ export class SessionArtifactsPanel extends Block {
 
         this.scratchpadBtn.onclick = async (e) => {
             if (e) e.stopPropagation();
-            const session = ui.aiManager.activeSession;
+            const session = this._getTargetSession();
             if (!session) return;
 
             if (!this.scratchpadEditorInstance) {
@@ -670,12 +696,13 @@ export class SessionArtifactsPanel extends Block {
         };
     }
 
-    async update() {
+    async update(sourceSession = null) {
         if (this.isUpdating) return;
         this.isUpdating = true;
 
         try {
-            const session = ui.aiManager.activeSession;
+            this.sourceSession = sourceSession || ui.aiManager.activeSession;
+            const session = this.sourceSession;
             if (!session) {
                 this.container.innerHTML = `<div class="plan-tasks-empty">No active session found. Open the Agent panel to begin.</div>`;
                 return;
@@ -823,7 +850,7 @@ export class SessionArtifactsPanel extends Block {
                 session.lastModified = Date.now();
                 await workspaceClient.setSession(session.id, session);
                 window.modal.toast("Checkpoint milestone created.");
-                this.update();
+                this.update(session);
             };
 
             const undoAllBtn = new Button("Undo All");
@@ -940,7 +967,7 @@ export class SessionArtifactsPanel extends Block {
                 }
 
                 window.modal.toast("Successfully undid all session changes.");
-                this.update();
+                this.update(session);
             };
 
             undoAllContainer.appendChild(setMilestoneBtn);
@@ -1017,6 +1044,7 @@ export class SessionArtifactsPanel extends Block {
                             console.debug("[SessionArtifactsPanel] Found matching tab, setting viewMode to diff and backupId:", latestBackup.backupId);
                             tab.config.viewMode = "diff";
                             tab.config.backupId = latestBackup.backupId;
+                            tab.config.sourceSession = session;
                             tab.click();
                         } else {
                             console.warn("[SessionArtifactsPanel] No matching tab found for path after opening:", path);
@@ -1107,7 +1135,7 @@ export class SessionArtifactsPanel extends Block {
                             }
 
                             window.modal.toast(`Successfully deleted ${filename}.`);
-                            this.update();
+                            this.update(session);
                         } catch (err) {
                             console.error("Delete failed:", err);
                             window.modal.notice(`Delete failed:<br><small>${err.message}</small>`, "Delete Error");
@@ -1169,7 +1197,7 @@ export class SessionArtifactsPanel extends Block {
                             }
 
                              window.modal.toast(`Successfully rolled back ${filename} to original state.`);
-                             this.update();
+                             this.update(session);
                          } catch (err) {
                             console.error("Rollback failed:", err);
                             window.modal.notice(`Rollback failed:<br><small>${err.message}</small>`, "Rollback Error");
