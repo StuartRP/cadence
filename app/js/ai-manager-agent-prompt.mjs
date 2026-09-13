@@ -170,12 +170,16 @@ ${hasTasks?"- When all tasks and objectives are satisfied, call the \`done\` too
         if (isSubAgent) {
             verificationSection = `
 # Verification Protocol
-- After making edits verify with build or tests via \`run_command\` where available and applicable.
+# Verification & Completion Protocol
+- Syntax validation is automatically enforce when using \`edit_file\` or \`create_file\`
+- As appropriate verify edits with \`run_command\` for any applicable unit tests
 - Before calling \`sub_agent_complete\`, re-read the sections you edited to confirm the changes are correct and consistent, and include a detailed summary of what you changed in your result.`;
         } else {
             verificationSection = `
 # Verification & Completion Protocol
-- Verify edits with \`validate_syntax\`/\`run_command\` as appropriate before marking tasks complete; re-read the edited sections before \`done\``;
+- Syntax validation is automatically enforce when using \`edit_file\` or \`create_file\`
+- As appropriate verify edits with \`run_command\` for any applicable unit tests; re-read the edited sections before \`done\`
+`;
         }
     }
 

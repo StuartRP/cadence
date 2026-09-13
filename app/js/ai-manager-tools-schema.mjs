@@ -166,7 +166,7 @@ export const tools = [
 	{
 		name: "edit_file",
 		description:
-			"Replace exact text in a file. Provide one `search`/`replace` pair or an `edits` array for multiple changes. `search` must match character-for-character.",
+			"Replace exact text in a file. Provide one `search`/`replace` pair or an `edits` array for multiple changes. `search` must match character-for-character. Automatically validates supported code files via (via node or go psrser)",
 		parameters: {
 			type: "object",
 			properties: {

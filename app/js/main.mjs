@@ -2973,7 +2973,7 @@ const keyBinds = [
 			if (activeTab && activeTab.config && activeTab.config.path !== "plan_tasks") {
 				const isDiff = activeTab.config.viewMode === "diff";
 				if (!isDiff) {
-					const session = window.ui?.aiManager?.activeSession;
+					const session = activeTab.config.sourceSession || window.ui?.aiManager?.activeSession;
 					const path = activeTab.config.path;
 					if (session && session.modifiedFiles) {
 						const matchedKey = Object.keys(session.modifiedFiles).find(k => {

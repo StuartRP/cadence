@@ -280,6 +280,10 @@ export class EditorHolder extends Panel {
         const path = tab.config.path;
         const side = tab.config.side || (this.id === 'leftHolder' ? 'left' : 'right');
 
+        // Source AI session: prefer the tab's own source session so a file opened from a
+        // non-active session reads that session's backups/pending edits, not the active tab's.
+        const session = tab.config.sourceSession || window.ui?.aiManager?.activeSession;
+
         // Check 1: Reload Notification (File modified outside)
         if (tab.config.fileModified) {
             this.editorHeaderBar.style.display = "flex";
@@ -310,6 +314,7 @@ export class EditorHolder extends Panel {
             diffBtn.innerHTML = `<ui-icon style="font-size: 13px;">difference</ui-icon> Show Diff`;
             diffBtn.onclick = () => {
                 tab.config.viewMode = "diff";
+                tab.config.sourceSession = session;
                 tab.click();
             };
             
@@ -351,10 +356,10 @@ export class EditorHolder extends Panel {
             return n1 === n2 || n1.endsWith('/' + n2) || n2.endsWith('/' + n1);
         };
 
-        // Check 2: Active AI session states (purely state-driven based on active session backups and pending edits)
+        // Check 2: Source AI session states (purely state-driven based on the tab's source session
+        // backups and pending edits).
         let hasBackups = false;
         let latestBackup = null;
-        const session = window.ui?.aiManager?.activeSession;
         
         let backups = [];
         if (session && session.modifiedFiles) {
@@ -389,6 +394,7 @@ export class EditorHolder extends Panel {
             diffBtn.innerHTML = `<ui-icon style="font-size: 13px;">difference</ui-icon> Show Diff`;
             diffBtn.onclick = () => {
                 tab.config.viewMode = "diff";
+                tab.config.sourceSession = session;
                 tab.click();
             };
             
@@ -414,6 +420,7 @@ export class EditorHolder extends Panel {
             diffBtn.onclick = () => {
                 tab.config.viewMode = "diff";
                 tab.config.backupId = latestBackup.backupId;
+                tab.config.sourceSession = session;
                 tab.click();
             };
             
@@ -440,6 +447,7 @@ export class EditorHolder extends Panel {
             diffBtn.innerHTML = `<ui-icon style="font-size: 13px;">difference</ui-icon> Show Diff`;
             diffBtn.onclick = () => {
                 tab.config.viewMode = "diff";
+                tab.config.sourceSession = session;
                 tab.click();
             };
             

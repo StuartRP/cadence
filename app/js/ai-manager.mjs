@@ -3510,8 +3510,8 @@ Output only the XML. Do not use any tools.`;
 		if (typeof responseBlock.finalize === 'function') {
 			responseBlock.finalize(finalizedResponse, modelMessage);
 		} else {
-			responseBlock.innerHTML = this.messageRenderer.renderResponseContent(finalizedResponse, modelMessage, true);
-			this.messageRenderer.addCodeBlockButtons(responseBlock, modelMessage);
+			responseBlock.innerHTML = this.messageRenderer.renderResponseContent(finalizedResponse, modelMessage, true, null, targetSession);
+			this.messageRenderer.addCodeBlockButtons(responseBlock, modelMessage, targetSession);
 		}
 
 		if (forcedReason === "secondary_thought" || forcedReason === "secondary_tool_call" || forcedReason === "repetition_loop") {
