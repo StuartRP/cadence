@@ -3,6 +3,10 @@ import { isFunction } from './utils.mjs';
 
 let MenuOpen = false
 let CurrentMenu = null
+
+const getMenuItems = (menu) =>
+	[...menu.querySelectorAll("ui-menu-item")].filter((item) => !item.hasAttribute("disabled"))
+
 export class Menu extends Panel {
 	constructor(content) {
 		super(content)
@@ -64,6 +68,10 @@ export class Menu extends Panel {
 		}
 		// const self = this
 		let p
+
+		// Remember who opened this menu so we can restore focus when it closes.
+		this._opener = origin instanceof PointerEvent ? origin.target : origin
+		if (!(this._opener instanceof HTMLElement)) this._opener = null
 
 
 		// clear styling for left/up combos
@@ -141,6 +149,7 @@ export class Menu extends Panel {
 							this.removeAttribute("active")
 							MenuOpen = false
 							CurrentMenu = null
+							this._restoreFocus()
 						})
 					}
 				},
@@ -157,6 +166,7 @@ export class Menu extends Panel {
 							this.removeAttribute("active")
 							MenuOpen = false
 							CurrentMenu = null
+							this._restoreFocus()
 						})
 					}
 				},
@@ -164,6 +174,83 @@ export class Menu extends Panel {
 			)
 		})
 		this.setAttribute("active", "true")
+
+		// Focus the first enabled menu item so arrow keys drive navigation immediately.
+		setTimeout(() => {
+			const items = getMenuItems(this)
+			if (items.length > 0 && this.hasAttribute("active")) {
+				items[0].focus({ preventScroll: true })
+			}
+		}, 16)
+	}
+
+	_restoreFocus() {
+		if (this._opener && this._opener.isConnected) {
+			this._opener.focus({ preventScroll: true })
+		}
+	}
+
+	/**
+	 * Keyboard navigation for an open menu. Registered at capture time on
+	 * document (see module scope below) so it runs before window.ui.commands'
+	 * global keydown handler. Returns true when the event was handled.
+	 */
+	_handleKeydown(e) {
+		if (!MenuOpen || CurrentMenu !== this || !this.hasAttribute("active")) return false
+		const items = getMenuItems(this)
+		if (items.length === 0) return false
+
+		const active = document.activeElement
+		const currentIsItem = active instanceof HTMLElement && items.includes(active)
+		let index = currentIsItem ? items.indexOf(active) : -1
+
+		switch (e.key) {
+			case "ArrowDown":
+				index = currentIsItem ? (index + 1) % items.length : 0
+				break
+			case "ArrowUp":
+				index = currentIsItem ? (index - 1 + items.length) % items.length : items.length - 1
+				break
+			case "Home":
+				index = 0
+				break
+			case "End":
+				index = items.length - 1
+				break
+			case "Enter":
+			case " ":
+				if (currentIsItem && !active.hasAttribute("disabled")) {
+					e.preventDefault()
+					e.stopImmediatePropagation()
+					active.click()
+					return true
+				}
+				return false
+			case "Escape":
+				e.preventDefault()
+				e.stopImmediatePropagation()
+				this.removeAttribute("active")
+				MenuOpen = false
+				CurrentMenu = null
+				this._restoreFocus()
+				return true
+			default:
+				return false
+		}
+
+		e.preventDefault()
+		e.stopImmediatePropagation()
+		// Skip over disabled items in the chosen direction.
+		for (let i = 0; i < items.length; i++) {
+			const target = items[index % items.length]
+			if (!target.hasAttribute("disabled")) {
+				target.focus({ preventScroll: true })
+				target.scrollIntoView({ block: "nearest" })
+				return true
+			}
+			index += (e.key === "ArrowDown") ? 1 : -1
+		}
+		return true
 	}
 }
 
@@ -186,5 +273,18 @@ const getPosition = (el) => {
 		h: el.offsetHeight,
 	}
 }
+
+// Capture-phase keyboard controller for menus. Registered here (menu.mjs is imported
+// before main.mjs), so it runs before window.ui.commands' own capture listener and can
+// stopImmediatePropagation() for menu-only keys (arrows, Home/End, Enter, Escape) while
+// a menu is open — without eating keys when no menu is open.
+document.addEventListener(
+	"keydown",
+	(e) => {
+		if (!MenuOpen || !CurrentMenu) return
+		CurrentMenu._handleKeydown(e)
+	},
+	{ capture: true }
+)
 
 customElements.define("ui-menu", Menu);
