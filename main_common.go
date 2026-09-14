@@ -165,7 +165,7 @@ func parseFlags() {
 	flag.BoolVar(&noIdleShutdownFlag, "no-idle-shutdown", true, "Disable automatic shutdown due to inactivity. Recommended for services.")
 	flag.StringVar(&serveFlag, "serve", "", "Serve live static files from this directory instead of embedded assets.")
 	flag.BoolVar(&browserFlag, "browser", false, "Open in the default browser instead of a native window.")
-	flag.BoolVar(&webviewFlag, "webview", false, "Open using the lightweight webview_go renderer.")
+	flag.BoolVar(&webviewFlag, "webview", false, "Open using the lightweight webview_go renderer (requires a -tags webview build; needs webkit2gtk-4.0).")
 	flag.BoolVar(&headlessFlag, "headless", false, "Run in headless mode (no UI or browser launch).")
 	flag.Parse()
 
