@@ -1701,7 +1701,7 @@ class AIManager {
 	 * @returns {boolean}
 	 */
 	_isPaidConnection(conn) {
-		return !!conn && (conn.provider === 'gemini' || conn.provider === 'claude');
+		return !!conn && (conn.provider === 'gemini' || conn.provider === 'claude' || conn.provider === 'openai');
 	}
 
 	/**
@@ -4117,7 +4117,7 @@ Output only the XML. Do not use any tools.`;
 
 	async loadSettings() {
 		const storedProvider = localStorage.getItem("aiProvider")
-		const supportedProviders = ["gemini", "llamacpp", "ollama", "claude"];
+		const supportedProviders = ["gemini", "llamacpp", "ollama", "claude", "openai"];
 		if (storedProvider && supportedProviders.includes(storedProvider)) {
 			this.aiProvider = storedProvider
 		}
