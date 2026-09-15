@@ -111,7 +111,12 @@
 	
 	
 	<ui-actionbar id="menu" hook="top" slim style="top: 0px; bottom: auto;">
-	    <ui-inline id="logo"><img src="images/code-192-simple.svg" style="color: #fff" height="32px"> Cadence </ui-inline>
+	    <ui-inline id="logo" role="button" tabindex="0" aria-expanded="false" aria-label="Cadence version">
+	        <img class="logo-lt" src="images/code-lt.svg" alt="">
+	        <span class="logo-name">Cadence</span>
+	        <img class="logo-gt" src="images/code-gt.svg" alt="">
+	        <span class="logo-version"><span class="major"></span><span class="tail"></span></span>
+	    </ui-inline>
  
 	    <ui-button id="menu_file">File</ui-button>
 	    <ui-button id="menu_edit">Edit</ui-button>
@@ -283,5 +288,6 @@
 	</ui-panel>
 
 	<script type="module" src="js/main.mjs"></script>
+	<script type="module" src="js/logo.mjs"></script>
 </body>
 </html>
