@@ -83,6 +83,94 @@ ui-actionbar[slim] img {
     max-height: 34px;
 }
 
+/* --- Top-bar logo: hover slides the "<>" apart to reveal the version ------ */
+ui-inline#logo {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    width: max-content;
+    height: var(--menuHeight);
+    line-height: var(--menuHeight);
+    overflow: hidden;
+    white-space: nowrap;
+    cursor: default;
+    user-select: none;
+    outline-offset: -2px;
+}
+
+/* The "<" sits in normal flow up against the word; only the ">" overlays and
+   slides across the word during the reveal. */
+ui-inline#logo .logo-lt {
+    flex: 0 0 auto;
+    width: 16px;
+    height: 32px;
+}
+
+ui-inline#logo .logo-gt {
+    position: absolute;
+    top: 50%;
+    left: 16px;
+    width: 16px;
+    height: 32px;
+    transform: translateY(-50%);
+    transition: left 0.5s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+ui-inline#logo .logo-name {
+    margin-left: 22px;
+    transition: opacity 0.26s ease;
+}
+
+ui-inline#logo .logo-version {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    display: flex;
+    align-items: baseline;
+    gap: 2px;
+    line-height: 1;
+    white-space: nowrap;
+    font-family: var(--font-mono);
+    color: var(--text-primary);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s ease;
+}
+
+ui-inline#logo .logo-version .major {
+    font-size: 20px;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+}
+
+ui-inline#logo .logo-version .tail {
+    font-size: 11px;
+    font-weight: 500;
+    opacity: 0.75;
+}
+
+ui-inline#logo.open .logo-gt {
+    left: calc(100% - 16px);
+}
+
+ui-inline#logo.open .logo-name {
+    opacity: 0;
+    transition: opacity 0.2s ease 0.15s;
+}
+
+ui-inline#logo.open .logo-version {
+    opacity: 1;
+    transition: opacity 0.24s ease 0.28s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    ui-inline#logo,
+    ui-inline#logo * {
+        transition: none !important;
+    }
+}
+
 ui-button,
 ui-file-item,
 ui-button-counter {

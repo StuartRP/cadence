@@ -137,7 +137,6 @@ window.ui = ui
 window.modal = Modal // Assign the singleton instance
 window.code = {
 	version: (() => {
-		const last = "0.8.0"
 		fetch("/version.json")
 			.then(async (response) => {
 				if (response.ok) {
@@ -148,7 +147,7 @@ window.code = {
 				}
 			})
 			.catch((e) => console.warn("Failed to fetch version.json", e))
-		return last
+		return ""
 	})(),
 }
 
