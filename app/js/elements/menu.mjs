@@ -4,6 +4,11 @@ import { isFunction } from './utils.mjs';
 let MenuOpen = false
 let CurrentMenu = null
 
+// Last pointer position (tracked so we can detect a cursor already resting over
+// the menu when it opens).
+let PointerX = -1
+let PointerY = -1
+
 const getMenuItems = (menu) =>
 	[...menu.querySelectorAll("ui-menu-item")].filter((item) => !item.hasAttribute("disabled"))
 
@@ -13,6 +18,10 @@ export class Menu extends Panel {
 		this.on("contextmenu", (e) => {
 			e.preventDefault()
 		})
+		// Pointer-driven mode: when the cursor moves over the menu it takes
+		// over selection (mouse selection), and keyboard resumes from there.
+		this._pointerItem = null
+		this._pointerActive = false
 	}
 
 	connectedCallback() {
@@ -49,6 +58,32 @@ export class Menu extends Panel {
 		if (click) {
 			this._click = eval(click)
 		}
+
+		// Mouse hover takes over selection while the cursor is over the menu.
+		this.addEventListener("pointerover", (e) => {
+			if (!this.hasAttribute("active")) return
+			const item = e.target instanceof Element ? e.target.closest("ui-menu-item") : null
+			if (item && item.hasAttribute("disabled")) {
+				this._enterPointerMode(null)
+				return
+			}
+			this._enterPointerMode(item)
+		})
+	}
+
+	/**
+	 * Enter pointer-driven selection. Drops the keyboard highlight so a hovered
+	 * item is the only highlighted one; the pointer position is remembered so an
+	 * arrow key can convert it into the keyboard selection.
+	 */
+	_enterPointerMode(item) {
+		this._pointerActive = true
+		this._pointerItem = item instanceof HTMLElement ? item : null
+		const parts = getMenuItems(this)
+		const active = document.activeElement
+		if (active instanceof HTMLElement && parts.includes(active) && active !== item) {
+			active.blur()
+		}
 	}
 
 	set click(v) {
@@ -68,6 +103,10 @@ export class Menu extends Panel {
 		}
 		// const self = this
 		let p
+
+		// Reset pointer mode for a fresh menu.
+		this._pointerItem = null
+		this._pointerActive = false
 
 		// Remember who opened this menu so we can restore focus when it closes.
 		this._opener = origin instanceof PointerEvent ? origin.target : origin
@@ -175,11 +214,20 @@ export class Menu extends Panel {
 		})
 		this.setAttribute("active", "true")
 
-		// Focus the first enabled menu item so arrow keys drive navigation immediately.
+		// Focus the first enabled menu item so arrow keys drive navigation
+		// immediately. If the cursor already rests on one of our items (menu
+		// opened under the mouse), leave pointer mode in charge instead.
 		setTimeout(() => {
 			const items = getMenuItems(this)
 			if (items.length > 0 && this.hasAttribute("active")) {
-				items[0].focus({ preventScroll: true })
+				const el = PointerX >= 0 ? document.elementFromPoint(PointerX, PointerY) : null
+				const hovered = el && el.closest ? el.closest("ui-menu-item") : null
+				if (hovered && items.includes(hovered) && !hovered.hasAttribute("disabled")) {
+					this._pointerActive = true
+					this._pointerItem = hovered
+				} else {
+					items[0].focus({ preventScroll: true })
+				}
 			}
 		}, 16)
 	}
@@ -202,14 +250,25 @@ export class Menu extends Panel {
 
 		const active = document.activeElement
 		const currentIsItem = active instanceof HTMLElement && items.includes(active)
-		let index = currentIsItem ? items.indexOf(active) : -1
+		const activeIndex = currentIsItem ? items.indexOf(active) : -1
+		// When pointer mode is active, an arrow key converts the hovered item
+		// into the keyboard selection and continues from there.
+		const pointerIndex = (!currentIsItem && this._pointerActive && this._pointerItem && items.includes(this._pointerItem))
+			? items.indexOf(this._pointerItem)
+			: -1
+
+		let index = -1
 
 		switch (e.key) {
 			case "ArrowDown":
-				index = currentIsItem ? (index + 1) % items.length : 0
+				index = currentIsItem ? (activeIndex + 1) % items.length
+					: pointerIndex >= 0 ? (pointerIndex + 1) % items.length
+					: 0
 				break
 			case "ArrowUp":
-				index = currentIsItem ? (index - 1 + items.length) % items.length : items.length - 1
+				index = currentIsItem ? (activeIndex - 1 + items.length) % items.length
+					: pointerIndex >= 0 ? (pointerIndex - 1 + items.length) % items.length
+					: items.length - 1
 				break
 			case "Home":
 				index = 0
@@ -218,14 +277,18 @@ export class Menu extends Panel {
 				index = items.length - 1
 				break
 			case "Enter":
-			case " ":
-				if (currentIsItem && !active.hasAttribute("disabled")) {
+			case " ": {
+				const victim = currentIsItem
+					? active
+					: (this._pointerActive && this._pointerItem && items.includes(this._pointerItem) ? this._pointerItem : null)
+				if (victim && !victim.hasAttribute("disabled")) {
 					e.preventDefault()
 					e.stopImmediatePropagation()
-					active.click()
+					victim.click()
 					return true
 				}
 				return false
+			}
 			case "Escape":
 				e.preventDefault()
 				e.stopImmediatePropagation()
@@ -240,6 +303,8 @@ export class Menu extends Panel {
 
 		e.preventDefault()
 		e.stopImmediatePropagation()
+		// An arrow key means keyboard navigation takes over from the pointer.
+		this._pointerActive = false
 		// Skip over disabled items in the chosen direction.
 		for (let i = 0; i < items.length; i++) {
 			const target = items[index % items.length]
@@ -285,6 +350,16 @@ document.addEventListener(
 		CurrentMenu._handleKeydown(e)
 	},
 	{ capture: true }
+)
+
+// Track the cursor so a menu that opens under the mouse starts in pointer mode.
+document.addEventListener(
+	"pointermove",
+	(e) => {
+		PointerX = e.clientX
+		PointerY = e.clientY
+	},
+	{ capture: true, passive: true }
 )
 
 customElements.define("ui-menu", Menu);
