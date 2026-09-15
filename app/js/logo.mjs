@@ -12,6 +12,12 @@ const versionOf = () => String(window.code?.version ?? "").trim()
 // explicit value wins so a direct fetch can fill in fast. The emphasised digit
 // is the first non-zero part of the version (e.g. the "8" in "0.8.0") — while
 // the major number is 0 it means the first non-zero part is the highlight.
+// Shows the experimental-build hammer (see the CSS) when the build channel
+// says experimental.
+const syncExperimental = (logo) => {
+	logo.classList.toggle("experimental", window.code?.experimental === true)
+}
+
 const setVersion = (logo, explicit) => {
 	const major = logo.querySelector(".logo-version .major")
 	const lead = logo.querySelector(".logo-version .version-lead")
@@ -43,10 +49,12 @@ const initLogo = () => {
 	}
 
 	setVersion(logo)
+	syncExperimental(logo)
 	fetch("/version.json")
 		.then((response) => (response.ok ? response.json() : null))
 		.then((data) => {
 			if (data?.version) setVersion(logo, data.version)
+			syncExperimental(logo)
 		})
 		.catch(() => {})
 
@@ -56,6 +64,7 @@ const initLogo = () => {
 	const isOpen = () => logo.classList.contains("open")
 	const setState = (open) => {
 		if (open) setVersion(logo)
+		syncExperimental(logo)
 		logo.classList.toggle("open", open)
 		logo.setAttribute("aria-expanded", open ? "true" : "false")
 	}

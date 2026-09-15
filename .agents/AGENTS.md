@@ -33,5 +33,11 @@ When building or modifying UI elements, use the custom web components defined in
 `./build.sh` - builds the backend server
 `curl -X POST http://localhost:3022/api/restart` - restarts the backend server (use port 3023 in dev mode)
 
+### Release builds
+Before building a stable release, set `"experimental": false` in
+`app/version.json` (currently `true` for the experimental/dev build). The
+field flows to the binary automatically because `version.json` is embedded at
+build time, and the UI hides the experimental-build hammer when it's false.
+
 Don't build the project unless explicitly requested by the user, or essential for testing
 Don't or `git add` or `git commit` unless explicitly requested by the user

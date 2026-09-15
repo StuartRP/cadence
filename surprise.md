@@ -36,6 +36,14 @@ description.
   in/out never leaves the logo stuck open.
 - The word is rendered **bold** (weight 700) so "Cadence" reads punchier in the
   bar.
+- On **experimental builds** a small two-tone hammer icon appears just after
+  the version number. It's detected purely from `app/version.json`'s
+  `"experimental": true` flag (drives `window.code.experimental`, so nothing
+  special is needed in the server), and the hammer is drawn as an inline SVG in
+  two tones of the same colour as the emphasised digit — a solid head and a
+  translucent (45% opacity) handle — both inheriting `--text-primary`, so the
+  readability layer keeps it legible on any theme with zero extra wiring.
+  Stable builds simply set `experimental: false` and the hammer disappears.
 - **Works on any theme:** even a bright-green system theme can't make the
   highlighted version unreadable. The theme pipeline now runs a universal
   readability pass before applying colours — see below.
