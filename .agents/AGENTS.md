@@ -15,6 +15,13 @@ When building or modifying UI elements, use the custom web components defined in
   - `await window.modal.prompt("Prompt text", "Title", "defaultVal")` (returns string or null)
   - `window.modal.toast("Notification message")`
 
+## PR & Surprise Documentation (MANDATORY)
+- Every pull request MUST document and report ALL changes it contains in the PR description. Never push undocumented changes, even if the intention is good.
+- If the user designates a feature as a "surprise":
+  - Refer to it in the PR description and commit message as `Small UI update (check surprise.md for details)` — nothing more specific.
+  - Put the real detail in the single `surprise.md` file at the repo root; append a new dated section per surprise (never create additional surprise files).
+  - The PR description must reference surprise.md.
+
 ## actions ##
 `./build.sh` - builds the backend server
 `curl -X POST http://localhost:3022/api/restart` - restarts the backend server (use port 3023 in dev mode)
