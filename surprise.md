@@ -23,9 +23,10 @@ description.
 - Hovering the logo starts a short delay (~700 ms), then the "<" and ">" slide
   apart. As the ">" sweeps rightward it covers the Cadence text, and the app's
   version number appears centred in the space the word used to occupy.
-- The version is formatted with the first non-zero part scaled up and the
-  rest smaller (`0.` and `.0` small, the `8` of `0.8.0` rendered large). While
-  the major number is `0`, the non-zero part carries the emphasis.
+- The version is formatted with the first non-zero part emphasised: it renders
+  in the same mono size as the Cadence text (13px) but bold (`700`), while the
+  surrounding parts stay at the light weight — so while the major number is `0`,
+  the non-zero part still carries the highlight (`0.8.0` → the `8` stands out).
 - The letters of "Cadence" **hop** in sequence (a small up-and-down bounce,
   left to right) just ahead of the `>` as it slides over them, then fade out
   the moment each is about to be covered.
@@ -95,7 +96,7 @@ apart (`main_common.go` "0.1.2", `app/version.json` "0.4.2", `app/js/main.mjs`
   little below the word's baseline — lining `<`/`>` up with the version number
   instead of floating above it. A stray `-4px` nudge for first-menu images in
   `app/css/main.css:412` was reset to `0` (that rule had been floating the
-  chevrons up).
+  chevrons up). The pair sits 1px below the box centre by design.
 - `app/index.html` — replaced the single logo image + text with
   `ui-inline#logo[role=button]` containing the two chevrons, the word, and the
   version spans.
