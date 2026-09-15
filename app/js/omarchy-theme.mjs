@@ -1,11 +1,12 @@
-// Bridges Cadence's CSS palette to the active Omarchy theme (if present).
+// Bridges Cadence's CSS palette to the active system theme.
 //
-// Omarchy exposes the running system theme under
-// ~/.local/state/omarchy/current/theme/colors.toml with a stable set of
+// The backend (GET /api/omarchy-theme) resolves the running desktop's theme:
+// Omarchy exposes the active theme under its colors.toml with a stable set of
 // semantic names (accent, background, foreground, selection, muted, red...
-// bright_*, plus a mode = dark|light). Cadence's own theme variables in
-// main.css use overlapping concepts (--bg-primary, --text-primary,
-// --color-accent, --green...), so we map one palette onto the other.
+// bright_*, plus a mode = dark|light), while KDE and GNOME only provide a
+// light/dark mode. Omarchy palettes are mapped onto Cadence's own theme
+// variables (--bg-primary, --text-primary, --color-accent, --green...);
+// mode-only palettes leave Cadence's own light/dark palette in charge.
 
 const API = "/api/omarchy-theme"
 
@@ -99,17 +100,23 @@ const fetchOmarchyTheme = async () => {
 }
 
 // Reads the backend's cached view without touching the network. Useful when
-// callers only need to know whether Omarchy is active.
+// callers only need to know the active system mode.
 const getCachedOmarchyTheme = () => cachedPalette
 
-// Applies an Omarchy palette to the document by writing the mapped Cadence
-// CSS custom properties onto the body element (inline styles there beat both
-// the :root and .darkmode stylesheet rules for every descendant). Returns the
-// palette that was applied, or null when nothing was applied.
+// Applies a system theme to the document by writing the mapped Cadence CSS
+// custom properties onto the body element (inline styles there beat both the
+// :root and .darkmode stylesheet rules for every descendant). Mode-only
+// palettes (KDE/GNOME — no colors) are cached but leave the stylesheet's own
+// light/dark palette in charge. Returns the palette that was applied, or null
+// when nothing was applied.
 const applyOmarchyPalette = (palette) => {
 	clearOmarchyPalette()
-	if (!palette || palette.detected !== true || !palette.colors) {
+	if (!palette || palette.detected !== true) {
 		return null
+	}
+	cachedPalette = palette
+	if (!palette.colors) {
+		return palette
 	}
 
 	const setVar = (name, value) => {
@@ -133,7 +140,6 @@ const applyOmarchyPalette = (palette) => {
 		setVar(target, fn(value))
 	}
 
-	cachedPalette = palette
 	return palette
 }
 
