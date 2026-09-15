@@ -103,3 +103,29 @@ apart (`main_common.go` "0.1.2", `app/version.json` "0.4.2", `app/js/main.mjs`
 - `docs/theme-system.md` and `docs/command-execution.md` — the theme-application
   flow, colour pairings, and the command-dispatch flow that this work depended
   on, recorded as living documentation.
+**Final logo-polish pass:**
+
+- **Chevron glyph geometry (final):** both chevron SVGs now use the same 1.4×
+  scale (`matrix(0.2123618, 0, 0, 0.2123618, ...)`) with independently computed
+  offsets so each glyph is centred on its own half's midline: the `<` at
+  `tx=-3.399, ty=-4.766` (viewBox `0 0 16 32`), the `>` at `tx=-5.542, ty=-4.771`
+  (viewBox `16 0 16 32`). The earlier pass had computed the `>` offset with the
+  `<` glyph's centre, which pushed it right and clipped the sharp tip at the SVG
+  edge; the tip is preserved again (painted bounds confirm symmetric margins,
+  no clip). Glyph size is back to 1.4× (slightly smaller than the interim
+  1.5×).
+- **Vertical alignment (final):** the version's baseline now sits exactly on
+  Cadence's baseline (`.logo-version` raised `1.5px`: `top: calc(50% - 1.5px)`),
+  and the chevron pair was nudged `1.5px` up (`margin-top: -1.5px`) so the
+  chevron midline equals the version block's midline. The legacy `-4px` img
+  nudge in `main.css:412` was fully removed (its `margin-top: 0` had been
+  silently overriding the fine-tune offsets).
+- **Version sizing (final):** the emphasised first number stays a mono octagon
+  at **15px** while the rest of the version stays at **13px**.
+- **Hammer sizing (final):** the experimental hammer now renders at **15px**,
+  matching the emphasised digit, two-tone as before.
+- **Horizontal centering (final):** the version+hammer block's width is centred
+  (sub-pixel) on the middle of the fully-open chevron width — because the `>`
+  slides to the logo's right edge while `<` pins at the left edge, the open
+  span's midline is the logo's own midline, and `left: 50%` + `translateX(-50%)`
+  hits it directly.
