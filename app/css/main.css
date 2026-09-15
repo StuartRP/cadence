@@ -410,7 +410,7 @@ ui-actionbar#menu > ui-inline:first-of-type {
 }
 
 ui-actionbar#menu ui-inline:first-of-type img {
-    margin-top: -4px;
+    margin-top: 0;
 }
 
 ui-actionbar[slim]#leftTabs,

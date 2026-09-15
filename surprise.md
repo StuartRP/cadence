@@ -89,6 +89,13 @@ apart (`main_common.go` "0.1.2", `app/version.json` "0.4.2", `app/js/main.mjs`
   overlays the word so it can slide across; the `logo-hop` keyframe plus
   per-letter `nth-child` delays ripple the bounce and the fade-out through the
   letters; version text is centred in the reveal.
+- The chevron glyphs were scaled up 1.5× inside their 16×32 boxes (same centre,
+  so the absolute positioning is untouched, and `>=` folding/edge geometry is
+  unchanged) so their painted span runs from a little above the capital C to a
+  little below the word's baseline — lining `<`/`>` up with the version number
+  instead of floating above it. A stray `-4px` nudge for first-menu images in
+  `app/css/main.css:412` was reset to `0` (that rule had been floating the
+  chevrons up).
 - `app/index.html` — replaced the single logo image + text with
   `ui-inline#logo[role=button]` containing the two chevrons, the word, and the
   version spans.
