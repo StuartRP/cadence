@@ -850,14 +850,15 @@ const clearInjectedTheme = () => {
 	// Instead, CSS handles light/dark mode with pre-defined variables.
 }
 
-// Live Omarchy tracking: while darkmode is "system", poll the backend in
-// case the user switches their Omarchy theme so Cadence follows along.
+// Live system-theme tracking: while darkmode is "system", poll the backend in
+// case the user switches desktop theme (Omarchy palette, KDE/GNOME mode) so
+// Cadence follows along.
 let omarchyPollTimer = null
 let lastPaletteKey = "none"
 
 const paletteKey = (palette) => {
 	if (!palette || palette.detected !== true) return "none"
-	return `${palette.theme}|${palette.mode}|${JSON.stringify(palette.colors)}`
+	return `${palette.source || ""}|${palette.theme || ""}|${palette.mode || ""}|${JSON.stringify(palette.colors || {})}`
 }
 
 const stopOmarchyPolling = () => {
@@ -867,9 +868,9 @@ const stopOmarchyPolling = () => {
 	}
 }
 
-// Applies the active Omarchy theme (if any) to the app palette and body
-// class. Falls back to the media query when Omarchy isn't detected. Skips
-// pointless work when the theme hasn't changed since the last pass.
+// Applies the active system theme (if any) to the app palette and body
+// class. Falls back to the media query when no desktop theme is detected.
+// Skips pointless work when the theme hasn't changed since the last pass.
 const applySystemTheme = async (force = false) => {
 	if (app.darkmode !== "system") {
 		clearOmarchyPalette()
