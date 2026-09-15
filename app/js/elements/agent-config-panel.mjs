@@ -4,6 +4,7 @@ import { UIAccordion } from './session-artifacts-panel.mjs';
 import AIConnections from '../ai-connections.mjs';
 import workspaceClient from '../workspace-client.mjs';
 import { openCommandPolicyReviewModal } from '../util/command-policy-review.mjs';
+import { getCapability, setCapability, commitCapabilities, clearTransient, investigateModel, probeChat, familyLabel, stateMeta, PROBE_PRESETS, guessFamilyFromUrl } from '../ai-probe.mjs';
 
 function showUndoToast(message, undoCallback) {
 	const toastEl = document.createElement('div');
@@ -828,15 +829,45 @@ export class AgentConfigPanel extends Block {
 		modelContainer.style.display = "none";
 		modelContainer.style.flexDirection = "column";
 		modelContainer.innerHTML = `<label style="font-size: 11px; font-weight: bold; margin-bottom: 2px;">Model Selection</label>`;
+		const modelRow = document.createElement("div");
+		modelRow.style.display = "flex";
+		modelRow.style.alignItems = "center";
+		modelRow.style.gap = "6px";
 		const datalistId = `cadence-model-options-${crypto.randomUUID()}`;
 		const modelSelect = document.createElement("input");
 		modelSelect.type = "text";
 		modelSelect.className = "themed-select";
 		modelSelect.autocomplete = "off";
 		modelSelect.spellcheck = false;
+		modelSelect.style.flex = "1";
 		modelSelect.placeholder = "Type to filter available models...";
 		modelSelect.setAttribute("list", datalistId);
-		modelContainer.appendChild(modelSelect);
+
+		const presetWrap = document.createElement("div");
+		presetWrap.style.display = "none";
+		presetWrap.style.alignItems = "center";
+		presetWrap.style.gap = "4px";
+		presetWrap.style.flexShrink = "0";
+		const presetIcon = document.createElement("span");
+		presetIcon.textContent = "\u{1F527}";
+		presetIcon.style.fontSize = "13px";
+		presetIcon.style.cursor = "default";
+		presetIcon.title = "This model has known parameters. Apply a tuned preset.";
+		const presetSelect = document.createElement("select");
+		presetSelect.className = "themed-select";
+		presetSelect.dataset.probePreset = "preset";
+		presetSelect.style.padding = "4px";
+		presetSelect.style.fontSize = "11px";
+		presetSelect.title = "Apply a tuned parameter preset";
+		["default", "coding", "planning"].forEach(p => {
+			const opt = document.createElement("option");
+			opt.value = p;
+			opt.textContent = p === "default" ? "Default" : p.charAt(0).toUpperCase() + p.slice(1);
+			presetSelect.appendChild(opt);
+		});
+		presetWrap.append(presetIcon, presetSelect);
+		modelRow.append(modelSelect, presetWrap);
+		modelContainer.appendChild(modelRow);
 		const modelDatalist = document.createElement("datalist");
 		modelDatalist.id = datalistId;
 		modelContainer.appendChild(modelDatalist);
@@ -849,6 +880,19 @@ export class AgentConfigPanel extends Block {
 		modelPlaceholder.textContent = "Test the connection to load available models";
 		modelContainer.appendChild(modelPlaceholder);
 		form.appendChild(modelContainer);
+
+		// Model capability panel
+		const modelInfo = document.createElement("div");
+		modelInfo.dataset.probePanel = "modelInfo";
+		modelInfo.style.display = "none";
+		modelInfo.style.flexDirection = "column";
+		modelInfo.style.gap = "6px";
+		modelInfo.style.border = "1px solid var(--border)";
+		modelInfo.style.borderRadius = "4px";
+		modelInfo.style.padding = "8px";
+		modelInfo.style.fontSize = "12px";
+		modelInfo.style.background = "var(--bg-secondary)";
+		form.appendChild(modelInfo);
 
 		// Test status container
 		const testStatus = document.createElement("div");
@@ -1013,7 +1057,10 @@ export class AgentConfigPanel extends Block {
 		// Action buttons
 		const cancelBtn = new Button("Cancel");
 		cancelBtn.className = "cancel";
-		cancelBtn.onclick = () => modalObj.hide();
+		cancelBtn.onclick = () => {
+			clearTransient(workConnId);
+			modalObj.hide();
+		};
 
 		const testBtn = new Button("Test Connection");
 		testBtn.className = "theme-button secondary";
@@ -1040,10 +1087,10 @@ export class AgentConfigPanel extends Block {
 		};
 		bindBlurTest();
 		
-		const saveBtn = new Button("Save");
+		const saveBtn = new Button(conn ? "Save" : "Create");
 		saveBtn.className = "theme-button primary";
 
-		const newConnId = conn ? null : `conn-${crypto.randomUUID()}`;
+		const workConnId = conn ? conn.id : `conn-${crypto.randomUUID()}`;
 
 		const currentConnConfig = () => {
 			const configObj = {
@@ -1089,7 +1136,7 @@ export class AgentConfigPanel extends Block {
 				configObj.thinkingLevel = provSelect.thinkingInput.value;
 			}
 			return {
-				id: conn ? conn.id : newConnId,
+				id: workConnId,
 				name: nameInput.value || `${provSelect.value} connection`,
 				provider: provSelect.value,
 				size: sizeSelect.value,
@@ -1099,9 +1146,12 @@ export class AgentConfigPanel extends Block {
 
 		let baseConfigStr = "";
 		let lastPassedStr = "";
+		let lastFamily = "";
+		let verifiedValues = { temperature: null, top_p: null };
 
 		const showModelPlaceholder = () => {
-			modelSelect.style.display = "none";
+			modelSelect.style.display = "";
+			modelPlaceholder.textContent = "Test the connection to load available models, or type a model ID manually";
 			modelPlaceholder.style.display = "";
 			modelContainer.style.display = "flex";
 		};
@@ -1155,6 +1205,129 @@ export class AgentConfigPanel extends Block {
 			modelSelect.style.display = "";
 			modelPlaceholder.style.display = "none";
 			modelContainer.style.display = "flex";
+			refreshCapabilityPanel();
+		};
+
+		const capForCurrent = () => {
+			const conf = currentConnConfig();
+			return getCapability(workConnId, modelSelect.value, { server: conf.config.server });
+		};
+
+		const renderModelInfo = () => {
+			const cap = capForCurrent();
+			if (!cap) {
+				modelInfo.style.display = "none";
+				return;
+			}
+			modelInfo.style.display = "flex";
+			modelInfo.innerHTML = "";
+			const familyLine = document.createElement("div");
+			familyLine.style.display = "flex";
+			familyLine.style.justifyContent = "space-between";
+			familyLine.style.alignItems = "center";
+			const familyLabelEl = document.createElement("span");
+			const badge = document.createElement("span");
+			badge.textContent = cap.family ? familyLabel(cap.family) : familyLabel(guessFamilyFromUrl(currentConnConfig().config.server));
+			badge.style.background = "var(--bg-input)";
+			badge.style.border = "1px solid var(--border)";
+			badge.style.borderRadius = "3px";
+			badge.style.padding = "1px 6px";
+			badge.style.fontSize = "10px";
+			badge.style.fontWeight = "bold";
+			const presetTag = document.createElement("span");
+			presetTag.textContent = cap.preset && cap.preset !== "default" ? `Preset: ${cap.preset}` : "Preset: Default";
+			presetTag.style.fontSize = "10px";
+			presetTag.style.opacity = "0.8";
+			familyLabelEl.append(badge, presetTag);
+			const probeStatus = document.createElement("span");
+			probeStatus.textContent = cap.probeOk ? `Probe OK in ${cap.latencyMs}ms` : `Probe failed: ${cap.error || "unknown"}`;
+			probeStatus.style.color = cap.probeOk ? "var(--text-secondary)" : "var(--color-error, #dc3545)";
+			familyLine.append(familyLabelEl, probeStatus);
+			modelInfo.appendChild(familyLine);
+
+			if (!cap.probeOk) {
+				const note = document.createElement("div");
+				note.textContent = "Investigation could not reach the model. Check the connection details.";
+				note.style.fontSize = "11px";
+				note.style.opacity = "0.8";
+				modelInfo.appendChild(note);
+				return;
+			}
+
+			if (cap.reasoning && cap.reasoning.accepted) {
+				const row = document.createElement("div");
+				row.style.display = "flex";
+				row.style.alignItems = "center";
+				row.style.gap = "6px";
+				const scheme = cap.reasoning.mode === "openrouter" ? "reasoning:effort" : cap.reasoning.mode === "o-series" ? "reasoning_effort" : "thinking budget";
+				const allowed = (cap.reasoning.effortAllowed || []).join(", ");
+				row.innerHTML = `<span style="font-size: 11px; color: var(--text-secondary);">Reasoning</span><span title="${"Supported scheme: " + scheme + (allowed ? " · Levels: " + allowed : "")}">🧠 ${cap.reasoning.mode === "openrouter" ? "OpenRouter scheme" : scheme}</span>`;
+				modelInfo.appendChild(row);
+			}
+
+			for (const key of ["temperature", "top_p", "top_k"]) {
+				const info = cap.params && cap.params[key];
+				if (!info) continue;
+				const meta = stateMeta(info.state);
+				const row = document.createElement("div");
+				row.style.display = "flex";
+				row.style.alignItems = "center";
+				row.style.justifyContent = "space-between";
+				row.style.gap = "6px";
+				const label = document.createElement("span");
+				label.textContent = key;
+				label.style.fontSize = "11px";
+				label.style.color = "var(--text-secondary)";
+				const value = document.createElement("span");
+				value.textContent = `${meta.icon} ${meta.label}`;
+				value.style.fontSize = "11px";
+				value.title = `${meta.tip} ${info.note || ""}`;
+				value.style.cursor = "help";
+				if (info.state === "locked") value.style.color = "var(--color-error, #dc3545)";
+				else if (info.state === "preset") value.style.color = "#cba832";
+				else if (info.state === "unverified") value.style.color = "#888";
+				row.append(label, value);
+				if (info.state === "preset" && info.available) {
+					const sub = document.createElement("div");
+					sub.textContent = info.available.join(", ");
+					sub.style.fontSize = "10px";
+					sub.style.opacity = "0.7";
+					modelInfo.appendChild(sub);
+				}
+				modelInfo.appendChild(row);
+			}
+		};
+
+		const refreshCapabilityPanel = () => {
+			const cap = capForCurrent();
+			const known = !!(cap && cap.params && Object.keys(cap.params).length > 0);
+			presetWrap.style.display = known ? "flex" : "none";
+			if (cap) {
+				presetSelect.value = cap.preset || "default";
+			}
+			renderModelInfo();
+		};
+
+		modelSelect.addEventListener("input", refreshCapabilityPanel);
+
+		presetSelect.onchange = () => {
+			const cap = capForCurrent();
+			if (!cap) return;
+			cap.preset = presetSelect.value;
+			setCapability(workConnId, modelSelect.value, cap);
+			const pp = PROBE_PRESETS[cap.preset];
+			if (pp) {
+				if (provSelect.tempInput && cap.params?.temperature?.state !== "locked") {
+					provSelect.tempInput.value = pp.temperature;
+				}
+				if (provSelect.topPInput && cap.params?.top_p?.state !== "locked") {
+					provSelect.topPInput.value = pp.top_p;
+				}
+				if (provSelect.thinkingInput) {
+					provSelect.thinkingInput.value = pp.thinkingLevel;
+				}
+			}
+			renderModelInfo();
 		};
 
 		const buildConnConf = () => {
@@ -1166,6 +1339,7 @@ export class AgentConfigPanel extends Block {
 		};
 
 		const doSave = () => {
+			commitCapabilities(workConnId);
 			AIConnections.saveConnection(buildConnConf());
 			modalObj.hide();
 			this.renderConnectionsList();
@@ -1190,8 +1364,14 @@ export class AgentConfigPanel extends Block {
 					testStatus.style.background = "rgba(45, 164, 78, 0.1)";
 					testStatus.style.border = "1px solid rgba(45, 164, 78, 0.3)";
 					testStatus.style.color = "#2da44e";
-					testStatus.textContent = "Connection check succeeded! Server reached and API key verified.";
+					const viaProbe = result.probe && result.probe.ok && (!result.models || result.models.length === 0);
+					testStatus.textContent = viaProbe
+						? `Connection check succeeded via live probe${result.probe.latencyMs ? ` (${result.probe.latencyMs}ms)` : ""}. Model list not available.`
+						: "Connection check succeeded! Server reached and API key verified.";
 				}
+
+				lastFamily = result.family || lastFamily || guessFamilyFromUrl(connConf.config.server);
+				connConf.config._family = lastFamily;
 
 				const models = result.models || (result.model ? [result.model] : []);
 				if (models.length > 0) {
@@ -1203,6 +1383,9 @@ export class AgentConfigPanel extends Block {
 
 				lastPassedStr = JSON.stringify(buildConnConf());
 				saveWithErrorsBtn.hide();
+				if (modelSelect.value) {
+					investigateBtn.show();
+				}
 				return true;
 			} catch (err) {
 				if (!silent) {
@@ -1222,22 +1405,45 @@ export class AgentConfigPanel extends Block {
 		};
 		testBtn.onclick = () => runTest(false);
 
-		saveBtn.onclick = async () => {
-			const curConf = buildConnConf();
-			const curStr = JSON.stringify(curConf);
-			const needsAuth = ["gemini", "claude", "openai"].includes(curConf.provider);
-			const untouched = curStr === baseConfigStr || curStr === lastPassedStr;
-			if (untouched && (isEdit || !needsAuth || curConf.config.apiKey)) {
-				doSave();
+		const investigateBtn = new Button("Investigate");
+		investigateBtn.className = "theme-button secondary";
+		investigateBtn.icon = "\u{1F50D}";
+		investigateBtn.title = "Live-probe this model to discover parameter support and tuned presets";
+		investigateBtn.hide();
+
+		const runInvestigate = async () => {
+			const model = modelSelect.value;
+			if (!model) {
+				testStatus.style.display = "block";
+				testStatus.style.background = "var(--bg-secondary)";
+				testStatus.style.border = "1px solid var(--border)";
+				testStatus.style.color = "var(--text)";
+				testStatus.textContent = "Select a model to investigate.";
 				return;
 			}
-			const passed = await runTest(false);
-			if (passed) {
-				doSave();
-			} else {
-				saveWithErrorsBtn.show();
+			investigateBtn.disabled = true;
+			investigateBtn.text = "Investigating...";
+			modelInfo.style.display = "flex";
+			modelInfo.innerHTML = `<span style="font-size: 11px; opacity: 0.8;">Probing ${model} for parameter support...</span>`;
+			try {
+				const conf = currentConnConfig();
+				const cap = await investigateModel({ ...conf.config, _family: lastFamily }, model);
+				if (!cap) return;
+				setCapability(workConnId, model, cap);
+				const tempVal = provSelect.tempInput ? parseFloat(provSelect.tempInput.value) : null;
+				const topPVal = provSelect.topPInput ? parseFloat(provSelect.topPInput.value) : null;
+				if (Number.isFinite(tempVal)) verifiedValues.temperature = tempVal;
+				if (Number.isFinite(topPVal)) verifiedValues.top_p = topPVal;
+				refreshCapabilityPanel();
+			} catch (err) {
+				modelInfo.innerHTML = `<span style="color: var(--color-error, #dc3545); font-size: 11px;">Investigation failed: ${err.message}</span>`;
+			} finally {
+				investigateBtn.disabled = false;
+				investigateBtn.text = "Investigate";
+				investigateBtn.icon = "\u{1F50D}";
 			}
 		};
+		investigateBtn.onclick = runInvestigate;
 
 		const saveWithErrorsBtn = new Button("Save w/Errors");
 		saveWithErrorsBtn.className = "theme-button secondary";
@@ -1247,7 +1453,86 @@ export class AgentConfigPanel extends Block {
 		saveWithErrorsBtn.hide();
 		saveWithErrorsBtn.onclick = () => doSave();
 
-		modalObj.actionBar.append(cancelBtn, testBtn, saveBtn, saveWithErrorsBtn);
+		const verifyEdits = async () => {
+			const conf = buildConnConf();
+			const model = conf.config.model;
+			if (!model) return true;
+			const cap = capForCurrent();
+			if (!cap || !cap.probeOk) return true;
+			const params = {};
+			const tempInput = provSelect.tempInput && cap.params?.temperature?.state !== "locked" ? provSelect.tempInput : null;
+			const topPInput = provSelect.topPInput && cap.params?.top_p?.state !== "locked" ? provSelect.topPInput : null;
+			if (tempInput && verifiedValues.temperature !== null) {
+				const v = parseFloat(tempInput.value);
+				if (Number.isFinite(v) && Math.abs(v - verifiedValues.temperature) > 1e-9) {
+					params.temperature = v;
+				}
+			}
+			if (topPInput && verifiedValues.top_p !== null) {
+				const v = parseFloat(topPInput.value);
+				if (Number.isFinite(v) && Math.abs(v - verifiedValues.top_p) > 1e-9) {
+					params.top_p = v;
+				}
+			}
+			if (Object.keys(params).length === 0) return true;
+			const probe = await probeChat({ ...conf.config, _family: cap.family }, { model, params });
+			if (probe.ok) {
+				if (params.temperature !== undefined) verifiedValues.temperature = params.temperature;
+				if (params.top_p !== undefined) verifiedValues.top_p = params.top_p;
+				return true;
+			}
+			const msg = (probe.errorMessage || probe.error || "").toLowerCase();
+			const rejectedKeys = ["temperature", "top_p"].filter(k => {
+				const plain = k === "top_p" ? "top_p" : k;
+				return params[k] !== undefined && (msg.includes(plain) || msg.includes(plain.replace("_", "")) || msg.includes("param"));
+			});
+			const fallback = rejectedKeys.length > 0 ? rejectedKeys : Object.keys(params);
+			let reverted = false;
+			for (const key of fallback) {
+				const input = key === "temperature" ? tempInput : topPInput;
+				if (!input) continue;
+				const revertTo = key === "temperature" ? verifiedValues.temperature : verifiedValues.top_p;
+				if (revertTo === null) continue;
+				input.value = revertTo;
+				input.style.border = "1px solid #dc3545";
+				input.style.boxShadow = "0 0 0 2px rgba(220, 53, 69, 0.25)";
+				reverted = true;
+				setTimeout(() => {
+					input.style.border = "1px solid var(--border)";
+					input.style.boxShadow = "none";
+				}, 2500);
+			}
+			if (reverted) {
+				testStatus.style.display = "block";
+				testStatus.style.background = "rgba(220, 53, 69, 0.1)";
+				testStatus.style.border = "1px solid rgba(220, 53, 69, 0.3)";
+				testStatus.style.color = "#dc3545";
+				testStatus.textContent = `Server rejected edited values (${Object.keys(params).join(", ")}); reverted to last verified values.`;
+				return false;
+			}
+			return true;
+		};
+
+		saveBtn.onclick = async () => {
+			const curConf = buildConnConf();
+			const curStr = JSON.stringify(curConf);
+			const needsAuth = ["gemini", "claude", "openai"].includes(curConf.provider);
+			const untouched = curStr === baseConfigStr || curStr === lastPassedStr;
+			if (untouched && (isEdit || !needsAuth || curConf.config.apiKey)) {
+				if (!(await verifyEdits())) return;
+				doSave();
+				return;
+			}
+			const passed = await runTest(false);
+			if (!passed) {
+				saveWithErrorsBtn.show();
+				return;
+			}
+			if (!(await verifyEdits())) return;
+			doSave();
+		};
+
+		modalObj.actionBar.append(cancelBtn, testBtn, investigateBtn, saveBtn, saveWithErrorsBtn);
 		modalObj.show();
 
 		// Preload saved model so an untouched modal can be saved without a test
