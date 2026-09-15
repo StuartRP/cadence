@@ -98,12 +98,16 @@ ui-inline#logo {
     outline-offset: -2px;
 }
 
-/* The "<" sits in normal flow up against the word; only the ">" overlays and
-   slides across the word during the reveal. */
+/* Both chevrons are absolutely positioned with the identical centering
+   (top:50% + translateY) so they always sit exactly level with each other;
+   "<" at the left edge, ">" overlaying the word so it can slide across. */
 ui-inline#logo .logo-lt {
-    flex: 0 0 auto;
+    position: absolute;
+    top: 50%;
+    left: 0;
     width: 16px;
     height: 32px;
+    transform: translateY(-50%);
 }
 
 ui-inline#logo .logo-gt {
@@ -117,8 +121,36 @@ ui-inline#logo .logo-gt {
 }
 
 ui-inline#logo .logo-name {
-    margin-left: 22px;
-    transition: opacity 0.26s ease;
+    margin-left: 38px;
+}
+
+/* The word is split into .logo-letter spans by logo.mjs. On reveal each letter
+   hops in sequence (left to right), then fades out just before the ">" slides
+   over it. The delays below are tuned for the 7 letters of "Cadence". */
+ui-inline#logo .logo-letter {
+    display: inline-block;
+    transform: translateY(0);
+    font-weight: 700;
+    transition: opacity 0.18s ease;
+}
+
+ui-inline#logo.open .logo-letter {
+    animation: logo-hop 0.42s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+    opacity: 0;
+}
+
+ui-inline#logo.open .logo-letter:nth-child(1) { animation-delay: 0.00s; transition-delay: 0.24s; }
+ui-inline#logo.open .logo-letter:nth-child(2) { animation-delay: 0.07s; transition-delay: 0.31s; }
+ui-inline#logo.open .logo-letter:nth-child(3) { animation-delay: 0.14s; transition-delay: 0.38s; }
+ui-inline#logo.open .logo-letter:nth-child(4) { animation-delay: 0.21s; transition-delay: 0.45s; }
+ui-inline#logo.open .logo-letter:nth-child(5) { animation-delay: 0.28s; transition-delay: 0.52s; }
+ui-inline#logo.open .logo-letter:nth-child(6) { animation-delay: 0.35s; transition-delay: 0.59s; }
+ui-inline#logo.open .logo-letter:nth-child(7) { animation-delay: 0.42s; transition-delay: 0.66s; }
+
+@keyframes logo-hop {
+    0%   { transform: translateY(0); }
+    32%  { transform: translateY(-5px); }
+    100% { transform: translateY(0); }
 }
 
 ui-inline#logo .logo-version {
@@ -133,6 +165,7 @@ ui-inline#logo .logo-version {
     white-space: nowrap;
     font-family: var(--font-mono);
     color: var(--text-primary);
+    text-shadow: var(--logo-version-shadow, none);
     opacity: 0;
     pointer-events: none;
     transition: opacity 0.2s ease;
@@ -144,7 +177,8 @@ ui-inline#logo .logo-version .major {
     letter-spacing: -0.5px;
 }
 
-ui-inline#logo .logo-version .tail {
+ui-inline#logo .logo-version .version-lead,
+ui-inline#logo .logo-version .version-tail {
     font-size: 11px;
     font-weight: 500;
     opacity: 0.75;
@@ -152,11 +186,6 @@ ui-inline#logo .logo-version .tail {
 
 ui-inline#logo.open .logo-gt {
     left: calc(100% - 16px);
-}
-
-ui-inline#logo.open .logo-name {
-    opacity: 0;
-    transition: opacity 0.2s ease 0.15s;
 }
 
 ui-inline#logo.open .logo-version {
@@ -168,6 +197,7 @@ ui-inline#logo.open .logo-version {
     ui-inline#logo,
     ui-inline#logo * {
         transition: none !important;
+        animation: none !important;
     }
 }
 

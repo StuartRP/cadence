@@ -8,6 +8,8 @@
 // variables (--bg-primary, --text-primary, --color-accent, --green...);
 // mode-only palettes leave Cadence's own light/dark palette in charge.
 
+import { enforceReadability } from "./readable-theme.mjs"
+
 const API = "/api/omarchy-theme"
 
 // Cache of the active Omarchy palette so callers can compare against it
@@ -119,25 +121,34 @@ const applyOmarchyPalette = (palette) => {
 		return palette
 	}
 
-	const setVar = (name, value) => {
-		if (value === undefined || value === null || value === "") return
-		document.body.style.setProperty(name, String(value))
-		appliedVars.push(name)
-	}
-
 	const colors = palette.colors
+
+	// Build the roll of custom properties this palette will write, then let the
+	// universal readability pass correct any foreground-on-surface pairs that
+	// would be too close in brightness — before anything hits the document.
+	// See readable-theme.mjs and docs/theme-system.md.
+	const roll = {}
+	const push = (name, value) => {
+		if (value === undefined || value === null || value === "") return
+		roll[name] = String(value)
+	}
 	for (const [source, targets] of Object.entries(TARGET_MAP)) {
 		const value = colors[source]
 		if (!value) continue
 		for (const target of Array.isArray(targets) ? targets : [targets]) {
-			setVar(target, value)
+			push(target, value)
 		}
 	}
-
 	for (const { source, target, fn } of COMPOSITE_TARGETS) {
 		const value = colors[source]
 		if (!value) continue
-		setVar(target, fn(value))
+		push(target, fn(value))
+	}
+
+	const enforced = enforceReadability(roll)
+	for (const [name, value] of Object.entries(enforced)) {
+		document.body.style.setProperty(name, value)
+		appliedVars.push(name)
 	}
 
 	return palette
