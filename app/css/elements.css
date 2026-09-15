@@ -171,6 +171,23 @@ ui-inline#logo .logo-version {
     transition: opacity 0.2s ease;
 }
 
+/* Experimental-build hammer: hidden unless logo.experimental is set (logo.mjs
+   syncs it from window.code.experimental). Two tones of --text-primary —
+   solid head + translucent handle — so it always matches the emphasised digit
+   and inherits the readability layer's colour enforcement. */
+ui-inline#logo .logo-hammer {
+    display: none;
+    flex: none;
+    align-self: center;
+    width: 17px;
+    height: 17px;
+    margin-left: 3px;
+}
+
+ui-inline#logo.experimental .logo-hammer {
+    display: block;
+}
+
 ui-inline#logo .logo-version .major {
     font-size: 20px;
     font-weight: 700;
