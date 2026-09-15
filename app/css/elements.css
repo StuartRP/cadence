@@ -100,13 +100,15 @@ ui-inline#logo {
 
 /* Both chevrons are absolutely positioned with the identical centering
    (top:50% + translateY) so they always sit exactly level with each other;
-   "<" at the left edge, ">" overlaying the word so it can slide across. */
+   "<" at the left edge, ">" overlaying the word so it can slide across. The
+   explicit margin-top: 0 guards the -4px img nudge in main.css:412. */
 ui-inline#logo .logo-lt {
     position: absolute;
     top: 50%;
     left: 0;
     width: 16px;
     height: 32px;
+    margin-top: 0;
     transform: translateY(-50%);
 }
 
@@ -116,6 +118,7 @@ ui-inline#logo .logo-gt {
     left: 16px;
     width: 16px;
     height: 32px;
+    margin-top: 0;
     transform: translateY(-50%);
     transition: left 0.5s cubic-bezier(0.22, 1, 0.36, 1);
 }
