@@ -11,8 +11,8 @@ import {
 } from "./elements/utils.mjs"
 import ui from "./ui-main.mjs" // Assuming ui-main.mjs handles its own import of Modal via elements.mjs
 import {
-	applyOmarchyPalette, clearOmarchyPalette, fetchOmarchyTheme,
-} from "./omarchy-theme.mjs"
+	applyOsPalette, clearOsPalette, fetchOsTheme,
+} from "./os-theme.mjs"
 import {
 	Modal, ActionBar, Block, Button, ContentFill, CounterButton, Element, Effects, Effect,
 	FileItem, FileList, Icon, Inline, Input, Inner, MediaView, Panel, Ripple, TabBar, TabItem,
@@ -841,70 +841,55 @@ const clearInjectedTheme = () => {
 	// Instead, CSS handles light/dark mode with pre-defined variables.
 }
 
-// Live system-theme tracking: while darkmode is "system", poll the backend in
-// case the user switches desktop theme (Omarchy palette, KDE/GNOME mode) so
-// Cadence follows along.
-let omarchyPollTimer = null
-let lastPaletteKey = "none"
-
-const paletteKey = (palette) => {
-	if (!palette || palette.detected !== true) return "none"
-	return `${palette.source || ""}|${palette.theme || ""}|${palette.mode || ""}|${JSON.stringify(palette.colors || {})}`
-}
-
-const stopOmarchyPolling = () => {
-	if (omarchyPollTimer) {
-		clearInterval(omarchyPollTimer)
-		omarchyPollTimer = null
-	}
-}
-
-// Applies the active system theme (if any) to the app palette and body
-// class. Falls back to the media query when no desktop theme is detected.
-// Skips pointless work when the theme hasn't changed since the last pass.
-const applySystemTheme = async (force = false) => {
-	if (app.darkmode !== "system") {
-		clearOmarchyPalette()
-		stopOmarchyPolling()
-		return
-	}
-
-	const palette = await fetchOmarchyTheme()
-	if (!palette) return // Backend unreachable — leave existing state alone.
-
-	const key = paletteKey(palette)
-	if (!force && lastPaletteKey === key) return
-
-	if (palette.detected) {
-		applyOmarchyPalette(palette)
+// Live OS-theme tracking: the backend pushes "theme_changed" over the
+// existing conduit-client websocket whenever the desktop theme changes,
+// so the UI reacts instantly with no polling. The REST fetch below only
+// establishes the initial state (and re-syncs on mode switches).
+const applyOsUiTheme = (palette) => {
+	if (palette && palette.detected) {
+		applyOsPalette(palette)
 		if (palette.mode === "light") {
 			document.body.classList.remove("darkmode")
 		} else {
 			document.body.classList.add("darkmode")
 		}
-		startOmarchyPolling()
 	} else {
-		clearOmarchyPalette()
-		stopOmarchyPolling()
+		clearOsPalette()
 		if (prefersDarkMode.matches) {
 			document.body.classList.add("darkmode")
 		} else {
 			document.body.classList.remove("darkmode")
 		}
 	}
-	lastPaletteKey = key
 	updateThemeAndMode(false) // refresh the dark/light toggle icon
 }
 
-const startOmarchyPolling = () => {
-	if (omarchyPollTimer) return
-	omarchyPollTimer = setInterval(async () => {
-		if (app.darkmode !== "system") {
-			stopOmarchyPolling()
-			return
-		}
-		await applySystemTheme()
-	}, 5000)
+// Applies the active OS theme (if any) to the app palette and body
+// class. Falls back to the media query when no desktop theme is detected.
+const applySystemTheme = async (force = false) => {
+	if (app.darkmode !== "system") {
+		clearOsPalette()
+		return
+	}
+
+	subscribeOsThemePush() // backend pushes further changes; fetch once here
+	const palette = await fetchOsTheme()
+	if (!palette) return // Backend unreachable — leave existing state alone.
+
+	applyOsUiTheme(palette)
+}
+
+// Subscribe once to backend theme pushes. Listener lives on the conduit
+// client (not the socket), so it survives reconnects with no re-subscribe.
+let osThemePushSubscribed = false
+const subscribeOsThemePush = () => {
+	if (osThemePushSubscribed) return
+	osThemePushSubscribed = true
+	conduitClient.on("theme_changed", (msg) => {
+		if (app.darkmode !== "system") return
+		const palette = msg && msg.data !== undefined ? msg.data : msg
+		applyOsUiTheme(palette)
+	})
 }
 
 const execCommandSetDarkMode = (mode) => {
@@ -912,13 +897,11 @@ const execCommandSetDarkMode = (mode) => {
 
 	switch (mode) {
 		case "light":
-			clearOmarchyPalette()
-			stopOmarchyPolling()
+			clearOsPalette()
 			document.body.classList.remove("darkmode")
 			break
 		case "dark":
-			clearOmarchyPalette()
-			stopOmarchyPolling()
+			clearOsPalette()
 			document.body.classList.add("darkmode")
 			break
 		case "system":

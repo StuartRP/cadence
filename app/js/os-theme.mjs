@@ -1,23 +1,27 @@
-// Bridges Cadence's CSS palette to the active system theme.
+// Bridges Cadence's CSS palette to the active OS theme.
 //
-// The backend (GET /api/omarchy-theme) resolves the running desktop's theme:
-// Omarchy exposes the active theme under its colors.toml with a stable set of
-// semantic names (accent, background, foreground, selection, muted, red...
-// bright_*, plus a mode = dark|light), while KDE and GNOME only provide a
-// light/dark mode. Omarchy palettes are mapped onto Cadence's own theme
-// variables (--bg-primary, --text-primary, --color-accent, --green...);
-// mode-only palettes leave Cadence's own light/dark palette in charge.
+// The backend (GET /api/theme) resolves the running desktop's theme through
+// its theme-provider registry: Omarchy exposes the active theme under its
+// colors.toml with a stable set of semantic names (accent, background,
+// foreground, selection, muted, red... bright_*, plus a mode =
+// dark|light), while KDE and GNOME only provide a light/dark mode.
+// OS palettes are mapped onto Cadence's own theme variables (--bg-primary,
+// --text-primary, --color-accent, --green...); mode-only palettes leave
+// Cadence's own light/dark palette in charge.
+//
+// Live updates arrive as "theme_changed" websocket pushes on the existing
+// conduit-client connection (see main.mjs); this module never polls.
 
-const API = "/api/omarchy-theme"
+const API = "/api/theme"
 
-// Cache of the active Omarchy palette so callers can compare against it
+// Cache of the active OS palette so callers can compare against it
 // without churning the network.
 let cachedPalette = null
 
 // Tracks which custom properties we've written so they can be reverted.
 let appliedVars = []
 
-// Direct passthroughs: an Omarchy palette key feeds one or more Cadence CSS
+// Direct passthroughs: an OS palette key feeds one or more Cadence CSS
 // custom properties verbatim.
 const TARGET_MAP = {
 	accent: ["--theme", "--color-accent"],
@@ -86,31 +90,32 @@ const hexToRgbTriplet = (hex) => {
 	return `${value >> 16 & 255}, ${value >> 8 & 255}, ${value & 255}`
 }
 
-// Fetches the current Omarchy palette. Returns null on an unreachable
-// backend; resolves to {detected:false} when Omarchy isn't installed.
-const fetchOmarchyTheme = async () => {
+// Fetches the current OS theme. Returns null on an unreachable
+// backend; resolves to {detected:false} when no supported desktop theme
+// is installed.
+const fetchOsTheme = async () => {
 	try {
 		const res = await fetch(API)
 		if (!res.ok) return null
 		return await res.json()
 	} catch (err) {
-		console.warn("[omarchy] theme fetch failed:", err)
+		console.warn("[os-theme] theme fetch failed:", err)
 		return null
 	}
 }
 
 // Reads the backend's cached view without touching the network. Useful when
 // callers only need to know the active system mode.
-const getCachedOmarchyTheme = () => cachedPalette
+const getCachedOsTheme = () => cachedPalette
 
-// Applies a system theme to the document by writing the mapped Cadence CSS
-// custom properties onto the body element (inline styles there beat both the
-// :root and .darkmode stylesheet rules for every descendant). Mode-only
+// Applies an OS theme palette to the document by writing the mapped Cadence
+// CSS custom properties onto the body element (inline styles there beat both
+// the :root and .darkmode stylesheet rules for every descendant). Mode-only
 // palettes (KDE/GNOME — no colors) are cached but leave the stylesheet's own
 // light/dark palette in charge. Returns the palette that was applied, or null
 // when nothing was applied.
-const applyOmarchyPalette = (palette) => {
-	clearOmarchyPalette()
+const applyOsPalette = (palette) => {
+	clearOsPalette()
 	if (!palette || palette.detected !== true) {
 		return null
 	}
@@ -145,7 +150,7 @@ const applyOmarchyPalette = (palette) => {
 
 // Reverts every custom property this module has written, restoring the
 // stylesheet's light/dark palette.
-const clearOmarchyPalette = () => {
+const clearOsPalette = () => {
 	for (const name of appliedVars) {
 		document.body.style.removeProperty(name)
 	}
@@ -154,8 +159,8 @@ const clearOmarchyPalette = () => {
 }
 
 export {
-	fetchOmarchyTheme,
-	getCachedOmarchyTheme,
-	applyOmarchyPalette,
-	clearOmarchyPalette,
+	fetchOsTheme,
+	getCachedOsTheme,
+	applyOsPalette,
+	clearOsPalette,
 }

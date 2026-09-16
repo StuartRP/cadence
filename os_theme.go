@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // systemThemeState carries the working system theme resolved from the active
@@ -21,6 +22,40 @@ type systemThemeState struct {
 	Mode     string            `json:"mode,omitempty"` // "dark" or "light"
 	Colors   map[string]string `json:"colors,omitempty"`
 }
+
+// --- Theme providers -------------------------------------------------------
+
+// themeProvider is one OS source of theme information. Available reports
+// whether the source exists on this machine; Read resolves its current
+// state. Mode-only sources (KDE/GNOME) report Detected with no Colors;
+// the UI then follows the mode and keeps its own palette.
+type themeProvider interface {
+	Name() string
+	Available() bool
+	Read() systemThemeState
+}
+
+type omarchyProvider struct{}
+
+func (omarchyProvider) Name() string           { return "omarchy" }
+func (omarchyProvider) Available() bool        { return omarchyStateDir() != "" }
+func (omarchyProvider) Read() systemThemeState { return readOmarchyTheme() }
+
+type kdeProvider struct{}
+
+func (kdeProvider) Name() string           { return "kde" }
+func (kdeProvider) Available() bool        { return desktopEnv() == "kde" }
+func (kdeProvider) Read() systemThemeState { return readKdeTheme() }
+
+type gnomeProvider struct{}
+
+func (gnomeProvider) Name() string           { return "gnome" }
+func (gnomeProvider) Available() bool        { return desktopEnv() == "gnome" }
+func (gnomeProvider) Read() systemThemeState { return readGnomeTheme() }
+
+// themeProviders is the resolution order. Omarchy first: it is the only
+// source carrying a full palette.
+var themeProviders = []themeProvider{omarchyProvider{}, kdeProvider{}, gnomeProvider{}}
 
 // --- Omarchy ---------------------------------------------------------------
 
@@ -232,22 +267,27 @@ func readGnomeTheme() systemThemeState {
 	return t
 }
 
-// readSystemTheme resolves the platform theme in priority order: Omarchy
-// (full palette), then KDE/GNOME (mode only).
+// readSystemTheme resolves the platform theme through the registered
+// providers in priority order: Omarchy (full palette), then KDE/GNOME
+// (mode only). Providers that are not present on this machine report
+// themselves unavailable and are skipped, so this fails gracefully on
+// any OS — unknown platforms resolve to {Detected: false} and the UI
+// falls back to its stylesheet palette.
 func readSystemTheme() systemThemeState {
-	if palette := readOmarchyTheme(); palette.Detected {
-		return palette
-	}
-	switch desktopEnv() {
-	case "kde":
-		return readKdeTheme()
-	case "gnome":
-		return readGnomeTheme()
+	for _, p := range themeProviders {
+		if !p.Available() {
+			continue
+		}
+		if s := p.Read(); s.Detected {
+			return s
+		}
 	}
 	return systemThemeState{Detected: false}
 }
 
-func systemThemeHandler(w http.ResponseWriter, r *http.Request) {
+// themeHandler serves the OS-agnostic theme endpoint. The response shape
+// is provider-independent; platform specifics stay inside the providers.
+func themeHandler(w http.ResponseWriter, r *http.Request) {
 	if !checkRequestAuthorization(r) {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
@@ -261,4 +301,37 @@ func systemThemeHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(readSystemTheme())
+}
+
+// themePollInterval is the backend re-resolution tick. Detection stays
+// server-side (filesystem reads, no network); clients learn about changes
+// through the websocket push, never by polling.
+const themePollInterval = 30 * time.Second
+
+// themeKey is the change identity of a resolved theme: source, name, mode
+// and full palette. The watcher broadcasts only when it changes.
+func themeKey(s systemThemeState) string {
+	colors, _ := json.Marshal(s.Colors)
+	return s.Source + "|" + s.Theme + "|" + s.Mode + "|" + string(colors)
+}
+
+// startThemeWatcher re-resolves the OS theme on a tick and pushes it to
+// connected websocket clients whenever it changes — including transitions
+// to undetected, so the UI can drop an applied palette. Runs until the
+// process exits; silent on machines with no supported desktop.
+func startThemeWatcher() {
+	go func() {
+		last := themeKey(readSystemTheme())
+		ticker := time.NewTicker(themePollInterval)
+		defer ticker.Stop()
+		for range ticker.C {
+			state := readSystemTheme()
+			key := themeKey(state)
+			if key == last {
+				continue
+			}
+			last = key
+			fileWatcher.broadcastTheme(state)
+		}
+	}()
 }

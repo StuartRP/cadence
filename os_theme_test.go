@@ -2,10 +2,15 @@ package main
 
 import (
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 func TestGtkSettingsMode(t *testing.T) {
@@ -139,7 +144,7 @@ func TestDesktopEnv(t *testing.T) {
 	}
 }
 
-func TestSystemThemeHandlerKde(t *testing.T) {
+func TestThemeHandlerKde(t *testing.T) {
 	oldDE := os.Getenv("XDG_CURRENT_DESKTOP")
 	oldSession := os.Getenv("XDG_SESSION_DESKTOP")
 	oldDs := os.Getenv("DESKTOP_SESSION")
@@ -160,7 +165,7 @@ func TestSystemThemeHandlerKde(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	res, err := srv.Client().Get(srv.URL + "/api/omarchy-theme")
+	res, err := srv.Client().Get(srv.URL + "/api/theme")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,5 +180,139 @@ func TestSystemThemeHandlerKde(t *testing.T) {
 	}
 	if !st.Detected || st.Source != "kde" || st.Mode != "dark" || st.Theme != "BreezeDark" {
 		t.Errorf("got %+v want detected kde dark BreezeDark", st)
+	}
+}
+func TestThemeProviderOrder(t *testing.T) {
+	want := []string{"omarchy", "kde", "gnome"}
+	if len(themeProviders) != len(want) {
+		t.Fatalf("got %d providers want %d", len(themeProviders), len(want))
+	}
+	for i, p := range themeProviders {
+		if p.Name() != want[i] {
+			t.Errorf("provider %d: got %q want %q", i, p.Name(), want[i])
+		}
+	}
+}
+
+func TestThemeProviderAvailability(t *testing.T) {
+	oldDE := os.Getenv("XDG_CURRENT_DESKTOP")
+	oldSession := os.Getenv("XDG_SESSION_DESKTOP")
+	oldDs := os.Getenv("DESKTOP_SESSION")
+	t.Cleanup(func() {
+		os.Setenv("XDG_CURRENT_DESKTOP", oldDE)
+		os.Setenv("XDG_SESSION_DESKTOP", oldSession)
+		os.Setenv("DESKTOP_SESSION", oldDs)
+	})
+	setHome(t)
+
+	if (omarchyStateDir() != "") != (omarchyProvider{}).Available() {
+		t.Errorf("omarchy availability mismatch with state dir presence")
+	}
+	os.Setenv("XDG_CURRENT_DESKTOP", "KDE")
+	os.Setenv("XDG_SESSION_DESKTOP", "")
+	os.Setenv("DESKTOP_SESSION", "")
+	if !(kdeProvider{}).Available() || (gnomeProvider{}).Available() {
+		t.Errorf("KDE env: want kde available, gnome not")
+	}
+	os.Setenv("XDG_CURRENT_DESKTOP", "")
+	os.Setenv("XDG_SESSION_DESKTOP", "gnome")
+	if (kdeProvider{}).Available() || !((gnomeProvider{}).Available()) {
+		t.Errorf("GNOME env: want gnome available, kde not")
+	}
+}
+
+func TestThemeKey(t *testing.T) {
+	a := systemThemeState{Detected: true, Source: "omarchy", Theme: "X", Mode: "dark", Colors: map[string]string{"background": "#000000"}}
+	if themeKey(a) != themeKey(a) {
+		t.Errorf("themeKey not stable")
+	}
+	b := a
+	b.Mode = "light"
+	if themeKey(a) == themeKey(b) {
+		t.Errorf("themeKey ignores mode change")
+	}
+	c := a
+	c.Colors = map[string]string{"background": "#ffffff"}
+	if themeKey(a) == themeKey(c) {
+		t.Errorf("themeKey ignores palette change")
+	}
+}
+
+func TestReadSystemThemeUndetected(t *testing.T) {
+	oldDE := os.Getenv("XDG_CURRENT_DESKTOP")
+	oldSession := os.Getenv("XDG_SESSION_DESKTOP")
+	oldDs := os.Getenv("DESKTOP_SESSION")
+	t.Cleanup(func() {
+		os.Setenv("XDG_CURRENT_DESKTOP", oldDE)
+		os.Setenv("XDG_SESSION_DESKTOP", oldSession)
+		os.Setenv("DESKTOP_SESSION", oldDs)
+	})
+	setHome(t) // empty home: no omarchy dir, no kdeglobals, no gtk settings
+	os.Setenv("XDG_CURRENT_DESKTOP", "")
+	os.Setenv("XDG_SESSION_DESKTOP", "")
+	os.Setenv("DESKTOP_SESSION", "sway")
+	if s := readSystemTheme(); s.Detected {
+		t.Errorf("got %+v want undetected on unknown desktop", s)
+	}
+}
+
+func TestBroadcastTheme(t *testing.T) {
+	ready := make(chan *websocket.Conn, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ws, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer ws.Close()
+		fileWatcher.mu.Lock()
+		if fileWatcher.subscribers == nil {
+			fileWatcher.subscribers = make(map[*websocket.Conn]map[string]string)
+		}
+		fileWatcher.subscribers[ws] = map[string]string{}
+		fileWatcher.mu.Unlock()
+		defer fileWatcher.removeClient(ws)
+		ready <- ws
+		for {
+			if _, _, err := ws.NextReader(); err != nil {
+				return
+			}
+		}
+	}))
+	defer srv.Close()
+
+	dialer := websocket.Dialer{}
+	header := http.Header{"Origin": []string{"http://localhost:3022"}}
+	client, _, err := dialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http")+"/ws", header)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer client.Close()
+
+	select {
+	case <-ready:
+	case <-time.After(5 * time.Second):
+		t.Fatal("server never upgraded the connection")
+	}
+
+	state := systemThemeState{Detected: true, Source: "gnome", Theme: "GNOME", Mode: "dark"}
+	fileWatcher.broadcastTheme(state)
+
+	client.SetReadDeadline(time.Now().Add(5 * time.Second))
+	var msg fileResponse
+	if err := client.ReadJSON(&msg); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if msg.Action != "theme_changed" {
+		t.Fatalf("action=%q want theme_changed", msg.Action)
+	}
+	data, ok := msg.Data.(map[string]interface{})
+	if !ok {
+		t.Fatalf("data has type %T want object", msg.Data)
+	}
+	if data["source"] != "gnome" || data["mode"] != "dark" {
+		t.Errorf("data=%v want source=gnome mode=dark", data)
+	}
+	if _, gone := fileWatcher.subscribers[client]; gone {
+		t.Errorf("client conn leaked in subscribers (wrong side of the socket)")
 	}
 }

@@ -7,7 +7,7 @@ import { ConduitFileList } from './elements/conduit-filelist.mjs';
 import aiManager from './ai-manager.mjs';
 import ollama from './ai-ollama.mjs';
 import agentTools from './agent/agent-tools.mjs';
-import { getCachedOmarchyTheme } from './omarchy-theme.mjs';
+import { getCachedOsTheme } from './os-theme.mjs';
 
 const defaultSettings = {
 	showGutter: true, //set to true to hide the line numbering
@@ -1824,11 +1824,11 @@ const uiManager = {
 
 			const prefersDarkMode = window.matchMedia('(prefers-color-scheme: dark)');
 
-			// Apply the darkmode class to the body based on app.darkmode setting.
-			// When Omarchy is active, its palette mode wins over the media query.
-			const omarchy = app.darkmode === 'system' ? getCachedOmarchyTheme() : null;
-			const isDark = omarchy
-				? omarchy.mode !== 'light'
+		// Apply the darkmode class to the body based on app.darkmode setting.
+		// When an OS theme is active, its palette mode wins over the media query.
+		const osTheme = app.darkmode === 'system' ? getCachedOsTheme() : null;
+		const isDark = osTheme
+			? osTheme.mode !== 'light'
 				: (app.darkmode === 'dark' || (app.darkmode === 'system' && prefersDarkMode.matches));
 			if (isDark) {
 				document.body.classList.add("darkmode");

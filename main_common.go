@@ -51,6 +51,7 @@ func runCadenceServer(block bool) {
 		if err == nil { fileAPIRoot = homeDir } else { fileAPIRoot = "." }
 	}
 	go fileWatcher.run()
+	startThemeWatcher()
 	updateLastActivity()
 	if !noIdleShutdownFlag {
 		go startIdleShutdownManager(60 * time.Minute)
@@ -99,7 +100,7 @@ func createServerMux() *http.ServeMux {
 	mux.HandleFunc("/up", upcheckHandler)
 	mux.HandleFunc("/files", filesApiHandler)
 	mux.HandleFunc("/api/config", appConfigHandler)
-	mux.HandleFunc("/api/omarchy-theme", systemThemeHandler)
+	mux.HandleFunc("/api/theme", themeHandler)
 	mux.HandleFunc("/api/check-syntax", checkSyntaxHandler)
 	mux.HandleFunc("/api/workspace", workspaceHandler)
 	mux.HandleFunc("/api/session", sessionHandler)

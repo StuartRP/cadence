@@ -8,36 +8,42 @@ How Cadence picks and applies the colours the interface is drawn with.
    `:root` (`--bg-primary`, `--text-primary`, `--icon-color`, …) with a
    `body.darkmode` variant. These are the fallback when no system theme is in
    effect.
-2. **System theme** — when the user's dark-mode setting is `system`, the app
+2. **OS theme** — when the user's dark-mode setting is `system`, the app
    asks the backend for the active desktop theme and copies its colours over
    the authored palette by writing inline custom properties on `<body>`
-   (inline styles beat the stylesheet, so the system palette always wins).
+   (inline styles beat the stylesheet, so the OS palette always wins).
 
 ## Application flow
 
-- `main.mjs` → `applySystemTheme()` (polls in `omarchyPollTimer` while in
-  `system` mode):
-  - resolves the current palette key with `paletteKey()` — if unchanged, skips
-    re-application (dedupe);
-  - fetches via `fetchOmarchyTheme()` / `getCachedOmarchyTheme()`;
-  - toggles `document.body.classList` `.darkmode` for the palette's mode;
-  - calls `applyOmarchyPalette(palette)`.
-- `app/js/omarchy-theme.mjs` → `applyOmarchyPalette()`:
+- Backend (`os_theme.go`): a **theme-provider registry** (`omarchy`, `kde`,
+  `gnome`) resolves the desktop theme in priority order via `GET /api/theme`
+  (served by `themeHandler`). Providers absent from the machine report
+  unavailable and are skipped, so unknown platforms resolve undetected and
+  the UI keeps its stylesheet palette.
+- Backend (`startThemeWatcher`, 30s tick): re-resolves the theme and pushes
+  `{"action": "theme_changed", "data": <palette>}` over the existing
+  conduit-client websocket whenever it changes — the same broadcast channel
+  as `indexer_status`. No polling, no per-change HTTP round-trip.
+- `main.mjs` → `applySystemTheme()`: fetches once via `fetchOsTheme()` for
+  the initial state, then relies on the push subscription
+  (`subscribeOsThemePush()` listens for `theme_changed` on the conduit
+  client; the listener survives reconnects, so there is nothing to restart).
+  Both paths funnel into `applyOsUiTheme()`, which toggles
+  `document.body.classList` `.darkmode` for the palette's mode.
+- `app/js/os-theme.mjs` → `applyOsPalette()`:
   1. builds a "roll" (`name → value`) of every custom property the palette
      contributes, resolving two sources:
      - **`TARGET_MAP`** — flat key-to-key mappings
-       (omarchy key → Cadence var), e.g. `background → --bg-primary`,
+       (OS palette key → Cadence var), e.g. `background → --bg-primary`,
        `foreground → --text-primary` (see table below);
      - **`COMPOSITE_TARGETS`** — values derived from a single source with a
        `fn()`, e.g. borders, hovers, and the surface shadows built from
        `color-mix(...)`;
-  2. runs the **universal readability pass**
-     (`enforceReadability()` from `app/js/readable-theme.mjs`) over the roll
-     *before* anything touches the document — see below;
-  3. writes every var to `document.body.style`, tracking names in
-     `appliedVars` so `clearOmarchyPalette()` removes them cleanly.
-- Authored (light/dark) modes never run the system pipeline, so they are not
-  subject to enforcement — the authored palette is assumed to be correct.
+  2. writes every var to `document.body.style`, tracking names in
+     `appliedVars` so `clearOsPalette()` removes them cleanly.
+- Authored (light/dark) modes never run the system pipeline. The cached
+  palette remains readable via `getCachedOsTheme()` (used for the dark-mode
+  menu state).
 
 ### Mode-only palettes (KDE / GNOME shell themes)
 Some desktop environments provide only `mode`, not colours. In that case the
@@ -46,16 +52,15 @@ kept and no enforcement runs.
 
 ## `TARGET_MAP` key relations
 
-Cadence var        ← omarchy key
-`--bg-primary`       ← `background`
-`--bg-secondary`     ← `lighter_background`
-`--bg-tertiary`      ← `dark_background`
-`--bg-tr-strong`     ← `darker_background`
-`--text-primary`     ← `foreground`
-`--text-secondary`   ← `light_foreground`
-`--text-muted`       ← `dark_foreground`
-`--accent-color`     ← `accent`
-`--accent-foreground`← `background` (inverted text)
+Cadence var(s) ← OS palette key
+`--theme`, `--color-accent` ← `accent`
+`--bg-primary` ← `background`
+`--bg-secondary`, `--bg-card`, `--bg-modal` ← `lighter_background`
+`--bg-tertiary`, `--bg-card-alt` ← `dark_background`
+`--bg-code`, `--bg-terminal` ← `darker_background`
+`--text-primary`, `--text`, `--text-color`, `--text-color-secondary` ← `foreground`
+`--text-secondary` ← `light_foreground`
+`--text-muted` ← `dark_foreground`
 
 (Keep this table in sync with the `TARGET_MAP` object — it is the source of
 truth.)
@@ -64,7 +69,12 @@ truth.)
 hover surfaces, and the translucent page surface — plus their `rgb()` triplet
 companions where CSS needs a raw channel list.
 
-## Universal readability enforcement
+## Universal readability enforcement (planned — not yet implemented)
+
+> Status: design sketch. No `readable-theme.mjs` ships yet and
+> `applyOsPalette()` writes the roll directly; nothing enforces contrast
+> today. The review feedback on font sizes stands: we are not aiming for
+> WCAG compliance in this project atm.
 
 Purpose: whatever theme is active (even a hostile one, e.g. bright-green
 menus), **all text and icons stay readable**, while **never touching surface
